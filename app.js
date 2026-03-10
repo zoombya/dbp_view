@@ -423,202 +423,161 @@
     }
   }
 
-  function buildRadialTree(graph) {
-    const N = graph.nodes.length;
-    const pb = graph.pairByNode;
+  // ─── FORNA NAView-style radial layout ───────────────────────────────────
+  // Port of simple_xy_coordinates from ViennaRNA/forna (Apache-2.0).
+  // Each loop is modelled as a regular polygon; stems get π/2 turns at
+  // entry/exit and π (straight) in their interior.  Positions are computed
+  // by walking the backbone and accumulating turn angles.
 
-    function parseRegion(lo, hi) {
-      const elems = [];
-      let i = lo;
-      while (i <= hi) {
-        const partner = pb.get(i);
-        if (partner !== undefined && partner > i && partner <= hi) {
-          const stemPairs = [];
-          let a = i, b = partner;
-          while (a < b && pb.get(a) === b) { stemPairs.push([a, b]); a++; b--; }
-          const inner = parseRegion(a, b);
-          elems.push({ kind: 'stem', pairs: stemPairs, inner });
-          i = stemPairs[0][1] + 1;
-        } else {
-          if (!(partner !== undefined && partner < i)) {
-            elems.push({ kind: 'base', id: i });
+  function fornaRadialPositions(pairByNode, N, BD) {
+    // Build 1-indexed pair table (forna convention: pt[0] = length)
+    const pt = new Array(N + 1);
+    pt[0] = N;
+    for (let i = 1; i <= N; i++) pt[i] = 0;
+    for (const [i, j] of pairByNode) {
+      pt[i + 1] = j + 1;
+    }
+
+    const g   = new Float64Array(N + 5);           // angle accumulator
+    const lSz = new Array(16 + Math.floor(N / 5)).fill(0); // unpaired counts
+    const stL = new Array(16 + Math.floor(N / 5)).fill(0); // stem lengths
+    let lp = 0, stk = 0;
+    const HALF_PI = Math.PI / 2;
+
+    // Recursive loop decomposition
+    function processLoop(start, end) {
+      let nSlots   = 2;   // entry + exit of enclosing stem
+      let pairIdx  = 0;
+      let nUnpaired = 0;
+      const pArr = new Array(2 + 2 * Math.ceil((end - start) / 4)).fill(0);
+
+      const prev = start - 1;
+      end++;
+
+      let i = start;
+      while (i !== end) {
+        const partner = pt[i];
+        if (partner && i !== 0) {          // paired → stem
+          nSlots += 2;
+          let x = i, a = partner;
+          pArr[++pairIdx] = x;
+          pArr[++pairIdx] = a;
+          i = partner + 1;
+
+          // walk inward to find stem length
+          const y = x, v = a;
+          let z = 0;
+          do { x++; a--; z++; } while (pt[x] === a);
+
+          let t = z - 2;
+          if (z >= 2) {
+            g[y + 1 + t] += HALF_PI;   // inner end, 5′ side
+            g[v - 1 - t] += HALF_PI;   // inner end, 3′ side
+            g[y]         += HALF_PI;   // outer end, 5′ side
+            g[v]         += HALF_PI;   // outer end, 3′ side
+            if (z > 2) {
+              for (; t >= 1; t--) {
+                g[y + t] = Math.PI;    // straight through interior
+                g[v - t] = Math.PI;
+              }
+            }
           }
-          i++;
+          stL[++stk] = z;
+          processLoop(x, a);           // recurse into inner loop
+        } else {
+          i++; nSlots++; nUnpaired++;
         }
       }
-      return elems;
-    }
 
-    return parseRegion(0, N - 1);
-  }
+      // Distribute polygon interior angle across loop positions
+      const polyAngle = Math.PI * (nSlots - 2) / nSlots;
+      pArr[++pairIdx] = end;
 
-  function placeRadialStem(stemElem, parentCx, parentCy, startR, outAngle, BD, PD, minR, nodes) {
-    const cosO = Math.cos(outAngle), sinO = Math.sin(outAngle);
-    const cosP = Math.cos(outAngle + Math.PI / 2), sinP = Math.sin(outAngle + Math.PI / 2);
-    for (let k = 0; k < stemElem.pairs.length; k++) {
-      const [a, b] = stemElem.pairs[k];
-      const d = startR + k * BD;
-      nodes[a].x = parentCx + d * cosO - PD / 2 * cosP;
-      nodes[a].y = parentCy + d * sinO - PD / 2 * sinP;
-      nodes[b].x = parentCx + d * cosO + PD / 2 * cosP;
-      nodes[b].y = parentCy + d * sinO + PD / 2 * sinP;
-      nodes[a].vx = nodes[a].vy = nodes[b].vx = nodes[b].vy = 0;
-    }
-    const nInner = stemElem.inner.length;
-    const innerLoopR = nInner ? Math.max(minR, (nInner + 2) * BD / (2 * Math.PI)) : minR;
-    const innerR = startR + stemElem.pairs.length * BD + innerLoopR;
-    placeRadialLoop(stemElem.inner, parentCx, parentCy, innerR, outAngle, BD, PD, minR, nodes, innerLoopR);
-  }
-
-  function placeRadialLoop(elements, parentCx, parentCy, innerR, entryAngle, BD, PD, minR, nodes, precomputedR) {
-    const n = elements.length;
-    if (n === 0) return;
-    const r = precomputedR || Math.max(minR, (n + 2) * BD / (2 * Math.PI));
-    const cx = parentCx + innerR * Math.cos(entryAngle);
-    const cy = parentCy + innerR * Math.sin(entryAngle);
-    const spread = 2 * Math.PI * n / (n + 2);
-    const baseAngle = entryAngle + Math.PI;
-    const startAngle = baseAngle - spread / 2;
-    elements.forEach((elem, i) => {
-      const a = n > 1 ? startAngle + spread * i / (n - 1) : baseAngle;
-      if (elem.kind === 'base') {
-        nodes[elem.id].x = cx + r * Math.cos(a);
-        nodes[elem.id].y = cy + r * Math.sin(a);
-        nodes[elem.id].vx = nodes[elem.id].vy = 0;
-      } else if (elem.kind === 'stem') {
-        placeRadialStem(elem, cx, cy, r, a, BD, PD, minR, nodes);
+      let segStart = prev < 0 ? 0 : prev;
+      for (let u = 1; u <= pairIdx; u++) {
+        const span = pArr[u] - segStart;
+        for (let t = 0; t <= span; t++) g[segStart + t] += polyAngle;
+        if (u >= pairIdx) break;
+        segStart = pArr[++u];
       }
-    });
+      lSz[++lp] = nUnpaired;
+    }
+
+    processLoop(0, N + 1);
+    lSz[lp] -= 2;                       // compensate for virtual entry/exit
+
+    // Walk backbone, turning by (π − accumulated angle) at each step
+    const positions = new Array(N);
+    let angle = 0, px = 0, py = 0;
+    positions[0] = [px, py];
+    for (let i = 1; i < N; i++) {
+      px += BD * Math.cos(angle);
+      py += BD * Math.sin(angle);
+      positions[i] = [px, py];
+      angle += Math.PI - g[i + 1];
+    }
+    return positions;
   }
 
   function layoutRadial(graph) {
-    const BD = getBaseSpacing();
-    const PD = BD * 1.1;
-    const MIN_R = BD * 1.2;
+    const BD    = getBaseSpacing();
     const nodes = graph.nodes;
-    if (!nodes.length) return;
+    const N     = nodes.length;
+    if (!N) return;
 
-    const tree = buildRadialTree(graph);
-    const n = tree.length;
-    if (n === 0) return;
+    const pos = fornaRadialPositions(graph.pairByNode, N, BD);
 
-    const cx = width / 2, cy = height / 2;
-    const extR = Math.max(60, n * BD / (2 * Math.PI));
-    const extStep = (2 * Math.PI) / n;
+    // Centre on viewport
+    let sx = 0, sy = 0;
+    for (let i = 0; i < N; i++) { sx += pos[i][0]; sy += pos[i][1]; }
+    const ox = width  / 2 - sx / N;
+    const oy = height / 2 - sy / N;
 
-    tree.forEach((elem, i) => {
-      const angle = -Math.PI / 2 + i * extStep;
-      if (elem.kind === 'base') {
-        nodes[elem.id].x = cx + extR * Math.cos(angle);
-        nodes[elem.id].y = cy + extR * Math.sin(angle);
-        nodes[elem.id].vx = nodes[elem.id].vy = 0;
-      } else if (elem.kind === 'stem') {
-        placeRadialStem(elem, cx, cy, extR, angle, BD, PD, MIN_R, nodes);
-      }
-    });
+    for (let i = 0; i < N; i++) {
+      nodes[i].x  = pos[i][0] + ox;
+      nodes[i].y  = pos[i][1] + oy;
+      nodes[i].vx = nodes[i].vy = 0;
+    }
   }
 
   function layoutRadialFromHints(graph) {
-    const BD = getBaseSpacing();
-    const PD = BD * 1.1;
-    const MIN_R = BD * 1.2;
+    const BD    = getBaseSpacing();
     const nodes = graph.nodes;
-    if (!nodes.length) return;
+    const N     = nodes.length;
+    if (!N) return;
 
+    // Capture current positions as hints
     const hx = nodes.map(n => n.x);
     const hy = nodes.map(n => n.y);
-
     let gcx = 0, gcy = 0;
-    hx.forEach(x => gcx += x); gcx /= hx.length;
-    hy.forEach(y => gcy += y); gcy /= hy.length;
-
+    hx.forEach(x => gcx += x); gcx /= N;
+    hy.forEach(y => gcy += y); gcy /= N;
     const spread = Math.max(...hx.map((x, i) => Math.hypot(x - gcx, hy[i] - gcy)));
     if (spread < 8) { layoutRadial(graph); return; }
 
-    function hintCentroid(ids) {
-      if (!ids.length) return { x: gcx, y: gcy };
-      let x = 0, y = 0;
-      for (const id of ids) { x += hx[id]; y += hy[id]; }
-      return { x: x / ids.length, y: y / ids.length };
+    // Compute fresh forna positions
+    const pos = fornaRadialPositions(graph.pairByNode, N, BD);
+    let fx = 0, fy = 0;
+    for (let i = 0; i < N; i++) { fx += pos[i][0]; fy += pos[i][1]; }
+    fx /= N; fy /= N;
+
+    // Optimal rotation to align with hints (Procrustes)
+    let sinSum = 0, cosSum = 0;
+    for (let i = 0; i < N; i++) {
+      const dx = pos[i][0] - fx, dy = pos[i][1] - fy;
+      const hxn = hx[i] - gcx,  hyn = hy[i] - gcy;
+      cosSum += dx * hxn + dy * hyn;
+      sinSum += dx * hyn - dy * hxn;
     }
+    const bestAngle = Math.atan2(sinSum, cosSum);
+    const cosA = Math.cos(bestAngle), sinA = Math.sin(bestAngle);
 
-    function collectIds(elem) {
-      const ids = [];
-      function visit(e) {
-        if (e.kind === 'base') { ids.push(e.id); }
-        else { for (const [a, b] of e.pairs) { ids.push(a); ids.push(b); } e.inner.forEach(visit); }
-      }
-      visit(elem);
-      return ids;
+    for (let i = 0; i < N; i++) {
+      const dx = pos[i][0] - fx, dy = pos[i][1] - fy;
+      nodes[i].x  = gcx + dx * cosA - dy * sinA;
+      nodes[i].y  = gcy + dx * sinA + dy * cosA;
+      nodes[i].vx = nodes[i].vy = 0;
     }
-
-    function placeHintStem(stemElem, parentCx, parentCy, startR, outAngle) {
-      const cosO = Math.cos(outAngle), sinO = Math.sin(outAngle);
-      const cosP = Math.cos(outAngle + Math.PI / 2), sinP = Math.sin(outAngle + Math.PI / 2);
-      for (let k = 0; k < stemElem.pairs.length; k++) {
-        const [a, b] = stemElem.pairs[k];
-        const d = startR + k * BD;
-        nodes[a].x = parentCx + d * cosO - PD / 2 * cosP;
-        nodes[a].y = parentCy + d * sinO - PD / 2 * sinP;
-        nodes[b].x = parentCx + d * cosO + PD / 2 * cosP;
-        nodes[b].y = parentCy + d * sinO + PD / 2 * sinP;
-        nodes[a].vx = nodes[a].vy = nodes[b].vx = nodes[b].vy = 0;
-      }
-      const nInner = stemElem.inner.length;
-      const innerLoopR = nInner ? Math.max(MIN_R, (nInner + 2) * BD / (2 * Math.PI)) : MIN_R;
-      const innerR = startR + stemElem.pairs.length * BD + innerLoopR;
-      placeHintLoop(stemElem.inner, parentCx, parentCy, innerR, outAngle, innerLoopR);
-    }
-
-    function placeHintLoop(elements, parentCx, parentCy, innerR, entryAngle, preR) {
-      const n = elements.length;
-      if (!n) return;
-      const r = preR || Math.max(MIN_R, (n + 2) * BD / (2 * Math.PI));
-      const cx = parentCx + innerR * Math.cos(entryAngle);
-      const cy = parentCy + innerR * Math.sin(entryAngle);
-
-      const allIds = elements.flatMap(e => collectIds(e));
-      const hc = hintCentroid(allIds);
-
-      const rawAngles = elements.map(elem => {
-        const c = hintCentroid(collectIds(elem));
-        return Math.atan2(c.y - hc.y, c.x - hc.x);
-      });
-
-      let sx = 0, sy = 0;
-      rawAngles.forEach(a => { sx += Math.cos(a); sy += Math.sin(a); });
-      const meanRaw = Math.atan2(sy, sx);
-
-      const rot = (entryAngle + Math.PI) - meanRaw;
-
-      elements.forEach((elem, i) => {
-        const a = rawAngles[i] + rot;
-        if (elem.kind === 'base') {
-          nodes[elem.id].x = cx + r * Math.cos(a);
-          nodes[elem.id].y = cy + r * Math.sin(a);
-          nodes[elem.id].vx = nodes[elem.id].vy = 0;
-        } else if (elem.kind === 'stem') {
-          placeHintStem(elem, cx, cy, r, a);
-        }
-      });
-    }
-
-    const tree = buildRadialTree(graph);
-    if (!tree.length) return;
-    const extR = Math.max(60, tree.length * BD / (2 * Math.PI));
-    const rootCx = width / 2, rootCy = height / 2;
-
-    tree.forEach(elem => {
-      const c = hintCentroid(collectIds(elem));
-      const a = Math.atan2(c.y - gcy, c.x - gcx);
-      if (elem.kind === 'base') {
-        nodes[elem.id].x = rootCx + extR * Math.cos(a);
-        nodes[elem.id].y = rootCy + extR * Math.sin(a);
-        nodes[elem.id].vx = nodes[elem.id].vy = 0;
-      } else if (elem.kind === 'stem') {
-        placeHintStem(elem, rootCx, rootCy, extR, a);
-      }
-    });
   }
 
   // ─── RENDERING HELPERS ────────────────────────────────────────────────────
