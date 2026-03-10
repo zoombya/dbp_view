@@ -524,10 +524,36 @@
     return positions;
   }
 
+  // Pull unpaired loop bases toward the midpoint of their backbone neighbors.
+  // Paired bases and strand-end bases are anchors and stay fixed.
+  // Multiple passes propagate the tension through long unpaired runs.
+  function applyLoopTension(graph, tension) {
+    if (tension <= 0) return;
+    const nodes  = graph.nodes;
+    const pb     = graph.pairByNode;
+    const prevOf = new Int32Array(nodes.length).fill(-1);
+    const nextOf = new Int32Array(nodes.length).fill(-1);
+    for (const lk of graph.backboneLinks) {
+      nextOf[lk.source] = lk.target;
+      prevOf[lk.target] = lk.source;
+    }
+    const factor = tension * 0.5;
+    for (let pass = 0; pass < 20; pass++) {
+      for (let id = 0; id < nodes.length; id++) {
+        if (pb.has(id)) continue;           // paired base → anchor
+        const p = prevOf[id], n = nextOf[id];
+        if (p < 0 || n < 0) continue;      // strand end → skip
+        nodes[id].x += ((nodes[p].x + nodes[n].x) / 2 - nodes[id].x) * factor;
+        nodes[id].y += ((nodes[p].y + nodes[n].y) / 2 - nodes[id].y) * factor;
+      }
+    }
+  }
+
   function layoutRadial(graph) {
-    const BD    = getBaseSpacing();
-    const nodes = graph.nodes;
-    const N     = nodes.length;
+    const BD      = getBaseSpacing();
+    const tension = Math.max(0, Math.min(1, +el("loopTension").value || 0));
+    const nodes   = graph.nodes;
+    const N       = nodes.length;
     if (!N) return;
 
     const pos = fornaRadialPositions(graph.pairByNode, N, BD);
@@ -543,6 +569,7 @@
       nodes[i].y  = pos[i][1] + oy;
       nodes[i].vx = nodes[i].vy = 0;
     }
+    applyLoopTension(graph, tension);
   }
 
   function layoutRadialFromHints(graph) {
@@ -577,12 +604,14 @@
     const bestAngle = Math.atan2(sinSum, cosSum);
     const cosA = Math.cos(bestAngle), sinA = Math.sin(bestAngle);
 
+    const tension = Math.max(0, Math.min(1, +el("loopTension").value || 0));
     for (let i = 0; i < N; i++) {
       const dx = pos[i][0] - fx, dy = pos[i][1] - fy;
       nodes[i].x  = gcx + dx * cosA - dy * sinA;
       nodes[i].y  = gcy + dx * sinA + dy * cosA;
       nodes[i].vx = nodes[i].vy = 0;
     }
+    applyLoopTension(graph, tension);
   }
 
   // ─── RENDERING HELPERS ────────────────────────────────────────────────────
