@@ -1346,14 +1346,6 @@
   el("inputText").value = `>tRNA-like example (multi-branch loop)
 GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA
 (((((((..((((........)))).(((((.......))))).....(((((.......))))))))))))....`;
-  // Apply URL parameters
-  {
-    const params = new URLSearchParams(location.search);
-    const layoutParam = params.get("layout");
-    if (layoutParam && ["radial","circular","linear"].includes(layoutParam)) {
-      el("layoutMode").value = layoutParam;
-    }
-  }
   { el("radialDetails").style.display = getLayoutMode() === 'radial' ? null : "none"; }
   setProgress("idle", "Status", 0, "Ready.");
 
@@ -1404,6 +1396,16 @@ GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA
   el("cancelBtn").addEventListener("click", () => {
     el("tbLive").classList.remove("active");
   });
+
+  // ─── URL parameters ────────────────────────────────────────────────────────
+  {
+    const params = new URLSearchParams(location.search);
+    const layoutParam = params.get("layout");
+    if (layoutParam && ["radial","circular","linear"].includes(layoutParam)) {
+      el("layoutMode").value = layoutParam;
+      el("layoutMode").dispatchEvent(new Event("change"));
+    }
+  }
 
   // ─── Keyboard shortcuts ────────────────────────────────────────────────────
   document.addEventListener("keydown", e => {
