@@ -177,8 +177,6 @@ def show(structure=None, sequence=None, **kwargs):
     This is a convenience wrapper around :class:`Viewer`.  All keyword
     arguments are forwarded to the constructor.
 
-    Returns the :class:`Viewer` instance so it can be reused or inspected.
-
     Examples
     --------
     >>> import dotbracketvibe as dbv
@@ -188,4 +186,3 @@ def show(structure=None, sequence=None, **kwargs):
     """
     viewer = Viewer(structure, sequence, **kwargs)
     viewer.show()
-    return viewer
