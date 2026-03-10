@@ -41,6 +41,50 @@ External dependencies (loaded via CDN):
 | **SEQ** | Semicolon-header format |
 | **CT** | Connect table (multi-structure files supported) |
 
+## Jupyter Notebook
+
+DotBracketVibe can also be used as a Jupyter notebook widget.
+
+### Install
+
+```bash
+pip install -e .
+```
+
+### Usage
+
+```python
+import dotbracketvibe as dbv
+
+# Visualise a dot-bracket string
+dbv.show("(((...)))")
+
+# With sequence and layout options
+dbv.show(
+    "(((((((..((((........)))).(((((.......))))).....(((((.......))))))))))))....",
+    sequence="GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA",
+    layout="radial",
+    height=600,
+)
+
+# Pass any supported format as raw text
+dbv.show(text=">tRNA\nGCGGAUU...\n(((...)))")
+
+# Get a reusable Viewer object (auto-displays in notebooks)
+v = dbv.Viewer("(((...)))", layout="circular", show_ui=True)
+```
+
+| Parameter   | Default    | Description |
+|-------------|------------|-------------|
+| `structure` | —          | Dot-bracket string |
+| `sequence`  | —          | Nucleotide sequence |
+| `text`      | —          | Raw input in any supported format (overrides structure/sequence) |
+| `format`    | `"auto"`   | Import format hint |
+| `layout`    | `"radial"` | `"radial"`, `"circular"`, or `"linear"` |
+| `width`     | `"100%"`   | Widget width (int for px, str for CSS value) |
+| `height`    | `500`      | Widget height in pixels |
+| `show_ui`   | `False`    | Show the toolbar and settings panels |
+
 ## License
 
 [MIT](LICENSE) © Michael Matthies

@@ -19,6 +19,14 @@ Thumbs.db
 # Claude
 .claude/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+
 # Misc
 *.log
 *.tmp
