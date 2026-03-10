@@ -71,6 +71,12 @@ summary{cursor:pointer;font-size:12px;font-weight:700;}
 .badge-idle{background:var(--muted);} .badge-busy{background:var(--busy);}
 .badge-ok{background:var(--ok);} .badge-err{background:var(--err);}
 
+/* ─── UI visibility toggle (key M) ─── */
+body.ui-hidden .toolbar,
+body.ui-hidden .panel,
+body.ui-hidden .status { opacity:0; pointer-events:none; transition:opacity .2s; }
+.toolbar, .panel, .status { transition:opacity .2s; }
+
 /* ─── Drag-and-drop overlay ─── */
 .drop-overlay{
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;

@@ -158,9 +158,18 @@
   function parseDBN(text) {
     const lines = text.replace(/\r/g, "").split("\n").filter(x => x.trim() !== "");
     if (lines.length === 1 && isLikelyDbLine(lines[0])) return parseRawStructure(lines[0]);
-    const title = lines[0]?.startsWith(">") ? lines[0].slice(1).trim() : "";
-    const sequence = cleanSequence(lines[1] || "");
-    const structure = stripWs(lines[2] || "").replace(/\s+/g, "");
+    let title = "", seqLine, structLine;
+    if (lines[0]?.startsWith(">")) {
+      title = lines[0].slice(1).trim();
+      seqLine   = lines[1] || "";
+      structLine = lines[2] || "";
+    } else {
+      // No title line — line 0 is sequence, line 1 is structure
+      seqLine   = lines[0] || "";
+      structLine = lines[1] || "";
+    }
+    const sequence = cleanSequence(seqLine);
+    const structure = stripWs(structLine).replace(/\s+/g, "");
     return { title, sequenceStrands:[sequence], structure, importedFormat:"dbn" };
   }
 
@@ -170,31 +179,65 @@
     let i = 0;
     while (i < lines.length) {
       const header = lines[i].trim();
-      const m = header.match(/^(\d+)\s+(.*)$/);
+      // Title is optional; energy annotations like "ENERGY = -10.5" are stripped
+      const m = header.match(/^(\d+)(?:\s+(.*))?$/);
       if (!m) break;
       const n = parseInt(m[1], 10);
-      const title = m[2] || "";
+      const rawTitle = (m[2] || "").replace(/^(ENERGY|dG|dGinit)\s*=\s*[-\d.e+]+\s*(kcal\/mol)?\s*/i, "").trim();
       const rows = [];
       for (let k = 0; k < n && i + 1 + k < lines.length; k++) rows.push(lines[i + 1 + k].trim().split(/\s+/));
       if (rows.length < n) break;
-      structures.push({title, rows});
+      structures.push({title: rawTitle, rows});
       i += n + 1;
     }
     const idx = Math.max(1, Math.min(which, structures.length)) - 1;
     const chosen = structures[idx] || {title:"", rows:[]};
-    const seq = chosen.rows.map(r => (r[1] || placeholderBase())).join("");
-    const pairs = [];
-    for (let j = 0; j < chosen.rows.length; j++) {
-      const partner = parseInt(chosen.rows[j][4] || "0", 10);
-      if (partner > 0 && partner - 1 > j) pairs.push([j, partner - 1]);
+    const rows = chosen.rows;
+
+    // Detect strand breaks: a nick exists after row j when the next-pointer of row j
+    // doesn't equal the position recorded in row j+1 (or is 0 = end of strand).
+    const nicks = new Set();
+    for (let j = 0; j < rows.length - 1; j++) {
+      const nextPtr = parseInt(rows[j][3] || "0", 10);
+      const nextPos = parseInt(rows[j + 1][0] || "0", 10);
+      if (nextPtr === 0 || nextPtr !== nextPos) nicks.add(j);
     }
-    return {
-      title:chosen.title,
-      sequenceStrands:[seq],
-      structure:pairsToBracketString(seq.length, pairs),
-      importedFormat:"ct",
-      notes:structures.length > 1 ? [`CT contained ${structures.length} structures; loaded structure ${idx + 1}.`] : []
-    };
+
+    // Build per-strand sequences and a node-index map keyed by CT position number
+    const strands = [];
+    const posToNode = new Map(); // 1-indexed CT position → 0-indexed node index
+    let cur = [], nodeIdx = 0;
+    for (let j = 0; j < rows.length; j++) {
+      posToNode.set(parseInt(rows[j][0], 10), nodeIdx++);
+      cur.push(rows[j][1] || placeholderBase());
+      if (nicks.has(j)) { strands.push(cur.join("")); cur = []; }
+    }
+    if (cur.length) strands.push(cur.join(""));
+
+    // Build pair list using the node-index map
+    const pairs = [];
+    for (let j = 0; j < rows.length; j++) {
+      const p1 = parseInt(rows[j][4] || "0", 10);
+      if (p1 > 0) {
+        const pi = posToNode.get(p1);
+        if (pi !== undefined && pi > j) pairs.push([j, pi]);
+      }
+    }
+
+    // Build flat bracket string then re-insert strand separators
+    const flatBracket = pairsToBracketString(rows.length, pairs);
+    let structure = "", pos = 0;
+    for (let si = 0; si < strands.length; si++) {
+      if (si > 0) structure += "+";
+      structure += flatBracket.slice(pos, pos + strands[si].length);
+      pos += strands[si].length;
+    }
+
+    const notes = structures.length > 1
+      ? [`CT contained ${structures.length} structures; loaded structure ${idx + 1}.`] : [];
+    if (nicks.size > 0) notes.push(`Detected ${strands.length} strands from backbone connectivity.`);
+
+    return { title: chosen.title, sequenceStrands: strands, structure, importedFormat:"ct", notes };
   }
 
   function autoDetectFormat(text) {
@@ -207,7 +250,8 @@
       return "fasta";
     }
     if (lines[0].startsWith(";")) return "seq";
-    if (/^\d+\s+\S+\s+\d+\s+\d+\s+\d+\s+\d+/.test(lines[1] || "")) return "ct";
+    // CT: data rows have ≥5 fields — idx nuc prev next pair [natural]
+    if (/^\d+\s+\S+\s+\d+\s+\d+\s+\d+/.test(lines[1] || "")) return "ct";
     if (lines.every(x => /^[.\+\(\)\[\]\{\}<>A-Za-z]+$/.test(x))) return "dbn";
     return "raw-structure";
   }
@@ -449,29 +493,30 @@
     let lp = 0, stk = 0;
     const HALF_PI = Math.PI / 2;
 
-    // Recursive loop decomposition
-    function processLoop(start, end) {
-      let nSlots   = 2;   // entry + exit of enclosing stem
-      let pairIdx  = 0;
-      let nUnpaired = 0;
-      const pArr = new Array(2 + 2 * Math.ceil((end - start) / 4)).fill(0);
-
+    // Iterative loop decomposition — avoids JS call-stack overflow on deeply
+    // nested / pseudoknotted structures (recursive version exceeded ~100k frames).
+    // All g-array writes are additive (+=) except stem-interior assignments
+    // (= Math.PI) which never overlap with any loop's polyAngle segments, so
+    // pre-order processing produces identical results to post-order recursion.
+    const workStack = [{start: 0, end: N + 1}];
+    while (workStack.length > 0) {
+      let { start, end } = workStack.pop();
+      let nSlots = 2, pairIdx = 0, nUnpaired = 0;
+      const pArr = [0]; // 1-indexed; pArr[0] unused
       const prev = start - 1;
-      end++;
+      end++;            // make end exclusive
 
       let i = start;
       while (i !== end) {
         const partner = pt[i];
         if (partner && i !== 0 && partner < end) { // paired → stem (skip pseudoknot crossings)
           nSlots += 2;
-          let x = i, a = partner;
-          pArr[++pairIdx] = x;
-          pArr[++pairIdx] = a;
-          i = partner + 1;
+          pArr[++pairIdx] = i;
+          pArr[++pairIdx] = partner;
 
           // walk inward to find stem length
-          const y = x, v = a;
-          let z = 0;
+          const y = i, v = partner;
+          let x = i, a = partner, z = 0;
           do { x++; a--; z++; } while (pt[x] === a);
 
           let t = z - 2;
@@ -488,7 +533,8 @@
             }
           }
           stL[++stk] = z;
-          processLoop(x, a);           // recurse into inner loop
+          workStack.push({start: x, end: a}); // schedule inner loop
+          i = partner + 1;
         } else {
           i++; nSlots++; nUnpaired++;
         }
@@ -507,9 +553,7 @@
       }
       lSz[++lp] = nUnpaired;
     }
-
-    processLoop(0, N + 1);
-    lSz[lp] -= 2;                       // compensate for virtual entry/exit
+    lSz[1] -= 2; // compensate for virtual entry/exit of the outermost loop (always lp index 1)
 
     // Walk backbone, turning by (π − accumulated angle) at each step
     const positions = new Array(N);
@@ -1352,6 +1396,26 @@ GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA
   el("cancelBtn").addEventListener("click", () => {
     el("tbLive").classList.remove("active");
   });
+
+  // ─── Keyboard shortcuts ────────────────────────────────────────────────────
+  document.addEventListener("keydown", e => {
+    // Ignore when focus is inside a text input or textarea
+    if (e.target.matches("input, textarea, select")) return;
+    if (e.key === "m" || e.key === "M") {
+      document.body.classList.toggle("ui-hidden");
+    } else if (e.key === "1") {
+      el("selectScope").value = "node";
+    } else if (e.key === "2") {
+      el("selectScope").value = "stem";
+    } else if (e.key === "3") {
+      el("selectScope").value = "loop";
+    }
+  });
+
+  // Hide UI by default when embedded in an iframe
+  if (window.self !== window.top) {
+    document.body.classList.add("ui-hidden");
+  }
 
   // ─── Drag-and-drop file loading ────────────────────────────────────────────
   const dropOverlay = el("dropOverlay");
