@@ -6,181 +6,222 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     :root{
-      --bg:#f3f4f6; --panel:#ffffff; --border:#d1d5db; --text:#111827; --muted:#6b7280;
-      --pair:#1d4ed8; --ok:#15803d; --err:#b91c1c; --busy:#2563eb;
+      --bg:#f3f4f6;--panel:#ffffff;--border:#d1d5db;--text:#111827;--muted:#6b7280;
+      --pair:#1d4ed8;--ok:#15803d;--err:#b91c1c;--busy:#2563eb;
     }
-    html,body{margin:0;height:100%;font-family:Arial,sans-serif;background:var(--bg);color:var(--text);}
-    .app{display:grid;grid-template-columns:490px 1fr;height:100vh;}
-    .sidebar{background:var(--panel);border-right:1px solid var(--border);padding:14px;overflow:auto;}
-    .viewer{position:relative;overflow:hidden;}
+    html,body{margin:0;height:100%;font-family:system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--text);}
+    .viewer{position:relative;width:100%;height:100vh;overflow:hidden;}
     svg{width:100%;height:100%;display:block;background:var(--bg);cursor:grab;}
     svg.dragging{cursor:grabbing;}
-    h1{font-size:18px;margin:0 0 10px;}
-    p{font-size:12px;color:var(--muted);line-height:1.4;margin:0 0 10px;}
-    .field{margin-bottom:10px;}
-    .field label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;}
-    textarea,input,select{
-      width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;
-      padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-      font-size:12px;background:#fff;
-    }
-    textarea{resize:vertical;min-height:92px;}
-    .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-    .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
-    .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;}
-    button{border:1px solid var(--border);background:#fff;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;}
-    button:hover{background:#f9fafb;}
-    button:disabled{opacity:.55;cursor:not-allowed;}
-    details{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fcfcfc;margin-top:10px;}
-    summary{cursor:pointer;font-size:12px;font-weight:700;}
-    .checks{display:grid;gap:6px;margin-top:8px;}
-    .checks label{display:flex;gap:8px;align-items:center;font-size:12px;font-weight:400;}
-    .stats{white-space:pre-wrap;border:1px solid var(--border);border-radius:8px;background:#fafafa;padding:10px;font-size:12px;line-height:1.45;margin-top:10px;}
     .status{
-      position:absolute;right:12px;bottom:12px;background:rgba(255,255,255,.94);border:1px solid var(--border);
-      border-radius:8px;padding:8px 10px;font-size:12px;color:var(--muted);min-width:220px;
+      position:fixed;right:14px;bottom:84px;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);
+      border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:11px;color:var(--muted);
+      min-width:200px;z-index:90;pointer-events:none;
     }
     .status strong{color:var(--text);}
-    .progress-wrap{margin:10px 0 8px 0;border:1px solid var(--border);background:#fafafa;border-radius:10px;padding:10px;}
-    .progress-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px;font-size:12px;}
-    .badge{padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;color:white;}
+    .toolbar{
+      position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+      background:rgba(255,255,255,.92);backdrop-filter:blur(10px);
+      border-radius:999px;box-shadow:0 2px 18px rgba(0,0,0,.12),0 0 0 1px rgba(0,0,0,.05);
+      z-index:100;padding:4px 5px;
+    }
+    .toolbar-progress{height:2px;border-radius:999px;background:#e5e7eb;overflow:hidden;margin:0 8px 3px;}
+    .toolbar-progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#60a5fa,#2563eb);transition:width .12s linear;}
+    .toolbar-row{display:flex;align-items:center;gap:2px;}
+    .toolbar-btn{
+      width:40px;height:40px;border:0;background:transparent;border-radius:999px;padding:0;
+      display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);
+    }
+    .toolbar-btn:hover{background:rgba(0,0,0,.06);}
+    .toolbar-btn.active{background:var(--busy);color:#fff;}
+    .toolbar-btn:disabled{opacity:.45;cursor:not-allowed;}
+    .toolbar-btn:disabled:hover{background:transparent;}
+    .toolbar-sep{width:1px;height:24px;background:var(--border);margin:0 3px;}
+    .panel{
+      position:fixed;left:50%;bottom:76px;transform:translateX(-50%);
+      width:min(520px,calc(100vw - 20px));max-height:58vh;overflow:auto;
+      background:rgba(255,255,255,.96);backdrop-filter:blur(10px);
+      border-radius:14px;box-shadow:0 4px 28px rgba(0,0,0,.14),0 0 0 1px rgba(0,0,0,.05);
+      padding:14px;z-index:99;display:none;
+    }
+    .panel.open{display:block;}
+    .panel-section{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);}
+    .field{margin-bottom:10px;}
+    .field label{display:block;font-size:11px;font-weight:700;margin-bottom:4px;color:var(--muted);}
+    textarea,input,select{
+      width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;
+      padding:7px 9px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:#fff;
+    }
+    textarea{resize:vertical;min-height:76px;}
+    .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+    .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+    .checks{display:grid;gap:5px;margin-top:8px;}
+    .checks label{display:flex;gap:7px;align-items:center;font-size:12px;font-weight:400;}
+    details{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fcfcfc;margin-top:10px;}
+    summary{cursor:pointer;font-size:12px;font-weight:700;}
+    .panel-btn{border:1px solid var(--border);background:#fff;border-radius:8px;padding:7px 12px;font-weight:700;font-size:12px;cursor:pointer;}
+    .panel-btn:hover{background:#f9fafb;}
+    .panel-btn:disabled{opacity:.55;cursor:not-allowed;}
+    .stats{white-space:pre-wrap;border:1px solid var(--border);border-radius:8px;background:#fafafa;padding:8px;font-size:11px;line-height:1.45;margin-top:10px;}
+    .badge{padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;color:white;}
     .badge-idle{background:var(--muted);} .badge-busy{background:var(--busy);}
     .badge-ok{background:var(--ok);} .badge-err{background:var(--err);}
-    .bar{width:100%;height:12px;border-radius:999px;background:#e5e7eb;overflow:hidden;}
-    .bar-fill{height:100%;width:0%;background:linear-gradient(90deg,#60a5fa,#2563eb);transition:width .12s linear;}
-    .progress-text{margin-top:6px;font-size:11px;color:var(--muted);min-height:28px;white-space:pre-wrap;}
-    .error-box{margin-top:8px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;padding:8px 10px;font-size:12px;white-space:pre-wrap;display:none;}
     .backbone{stroke-width:2.2;stroke-linecap:round;}
     .pair{fill:none;stroke:var(--pair);stroke-width:2.0;stroke-linecap:round;opacity:.95;}
     .node{stroke:#111827;stroke-width:.8;}
     .node.selected{stroke:#f59e0b !important;stroke-width:2.5 !important;filter:drop-shadow(0 0 3px #f59e0b88);}
     .label{font-size:10px;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;}
+    .end-marker{font-size:9px;font-weight:700;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;}
   </style>
 </head>
 <body>
-<div class="app">
-  <div class="sidebar">
-    <h1>Secondary Structure Viewer</h1>
-    <p>
-      Visualize RNA secondary structures in radial, circular, or linear layout modes.
-      Radial mode uses rigid-body refinement to reduce stem overlap.
-    </p>
+<!-- Full-screen viewer -->
+<div class="viewer">
+  <svg id="svg"></svg>
+  <div class="status" id="status"><strong>IDLE</strong><br>zoom 100%</div>
+</div>
 
-    <div class="progress-wrap">
-      <div class="progress-head">
-        <div id="progressTitle">Status</div>
-        <div id="progressBadge" class="badge badge-idle">IDLE</div>
-      </div>
-      <div class="bar"><div id="progressFill" class="bar-fill"></div></div>
-      <div id="progressText" class="progress-text">Ready.</div>
-      <div id="errorBox" class="error-box"></div>
-    </div>
+<!-- Floating toolbar -->
+<div class="toolbar">
+  <div class="toolbar-progress"><div id="progressFill" class="toolbar-progress-fill"></div></div>
+  <div class="toolbar-row">
+    <button class="toolbar-btn" id="tbInput" title="Input data">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="12" y2="16"/></svg>
+    </button>
+    <div class="toolbar-sep"></div>
+    <button class="toolbar-btn" id="renderBtn" title="Render">
+      <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><polygon points="7,4 19,12 7,20"/></svg>
+    </button>
+    <button class="toolbar-btn" id="tbLayout" title="Layout: Radial">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><line x1="12" y1="3" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="21"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/></svg>
+    </button>
+    <button class="toolbar-btn" id="relaxBtn" title="Relax">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><path d="M3 12a9 9 0 019-9 9.75 9.75 0 016.7 2.7L21 8"/><path d="M21 3v5h-5"/></svg>
+    </button>
+    <button class="toolbar-btn" id="tbLive" title="Continuous simulation">
+      <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg>
+    </button>
+    <div class="toolbar-sep"></div>
+    <button class="toolbar-btn" id="fitBtn" title="Fit view">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><polyline points="15,3 21,3 21,9"/><polyline points="9,21 3,21 3,15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+    </button>
+    <button class="toolbar-btn" id="resetBtn" title="Reset zoom">
+      <svg width="18" height="18" viewBox="0 0 24 24"><text x="12" y="16.5" text-anchor="middle" font-size="13" font-weight="800" fill="currentColor" font-family="system-ui">1:1</text></svg>
+    </button>
+    <div class="toolbar-sep"></div>
+    <button class="toolbar-btn" id="tbSettings" title="Settings">
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="var(--bg)" stroke="currentColor"/><circle cx="15" cy="12" r="2" fill="var(--bg)" stroke="currentColor"/><circle cx="9" cy="18" r="2" fill="var(--bg)" stroke="currentColor"/></svg>
+    </button>
+    <button class="toolbar-btn" id="cancelBtn" title="Cancel" disabled>
+      <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>
+  </div>
+</div>
 
+<!-- Hidden progress elements (JS reads/writes these) -->
+<div style="display:none">
+  <span id="progressTitle"></span>
+  <span id="progressBadge" class="badge badge-idle">IDLE</span>
+  <span id="progressText"></span>
+  <span id="errorBox"></span>
+</div>
+
+<!-- Input panel -->
+<div class="panel" id="inputPanel">
+  <div class="field">
+    <label for="inputText">Input structure or file text</label>
+    <textarea id="inputText"></textarea>
+  </div>
+  <div class="row2">
     <div class="field">
-      <label for="inputText">Input structure or file text</label>
-      <textarea id="inputText"></textarea>
+      <label for="importFormat">Import format</label>
+      <select id="importFormat">
+        <option value="auto">Auto-detect</option>
+        <option value="raw-structure">Raw structure</option>
+        <option value="dbn">Dot-bracket / DBN</option>
+        <option value="fasta">FASTA</option>
+        <option value="seq">SEQ</option>
+        <option value="ct">CT</option>
+      </select>
     </div>
-
-    <div class="row2">
-      <div class="field">
-        <label for="importFormat">Import format</label>
-        <select id="importFormat">
-          <option value="auto">Auto-detect</option>
-          <option value="raw-structure">Raw structure</option>
-          <option value="dbn">Dot-bracket / DBN</option>
-          <option value="fasta">FASTA</option>
-          <option value="seq">SEQ</option>
-          <option value="ct">CT</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="ctIndex">CT structure index</label>
-        <input id="ctIndex" type="number" min="1" step="1" value="1">
-      </div>
+    <div class="field">
+      <label for="ctIndex">CT structure index</label>
+      <input id="ctIndex" type="number" min="1" step="1" value="1">
     </div>
-
-    <div class="row2">
-      <div class="field">
-        <label for="layoutMode">Layout mode</label>
-        <select id="layoutMode">
-          <option value="radial" selected>Radial</option>
-          <option value="circular">Circular</option>
-          <option value="linear">Linear / arc</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="baseSpacing">Base spacing (px)</label>
-        <input id="baseSpacing" type="number" step="1" value="16" min="6">
-      </div>
-    </div>
-
-    <details id="selectionDetails" open>
-      <summary>Selection &amp; editing</summary>
-      <div class="row2" style="margin-top:8px;">
-        <div class="field">
-          <label for="selectScope">Click selects</label>
-          <select id="selectScope">
-            <option value="node">Individual base</option>
-            <option value="stem">Stem</option>
-            <option value="loop">Loop</option>
-            <option value="strand">Strand</option>
-          </select>
-        </div>
-        <div class="field" style="display:flex;flex-direction:column;justify-content:flex-end;">
-          <button id="clearSelBtn" style="margin:0;width:100%;">Clear selection</button>
-        </div>
-      </div>
-    </details>
-
-    <div class="controls">
-      <button id="importBtn">Import</button>
-      <button id="renderBtn">Render</button>
-      <button id="relaxBtn">Relax again</button>
-      <button id="fitBtn">Fit</button>
-      <button id="resetBtn">Reset zoom</button>
-      <button id="cancelBtn" disabled>Cancel</button>
-    </div>
-
+  </div>
+  <div style="margin:8px 0">
+    <button class="panel-btn" id="importBtn">Import</button>
+  </div>
+  <div class="panel-section">
     <div class="field">
       <label for="sequenceText">Sequence / strands</label>
       <textarea id="sequenceText"></textarea>
     </div>
-
     <div class="field">
       <label for="structureText">Structure (dot-bracket-plus)</label>
       <textarea id="structureText"></textarea>
     </div>
+  </div>
+</div>
 
-    <details id="radialDetails">
-      <summary>Radial refinement (rigid-body)</summary>
-      <div class="row3" style="margin-top:10px;">
-        <div class="field"><label for="radialTicks">polish ticks</label><input id="radialTicks" type="number" step="50" min="0" value="350"></div>
-        <div class="field"><label for="radialCharge">charge</label><input id="radialCharge" type="number" step="5" value="-55"></div>
-        <div class="field"><label for="radialCollision">collision r</label><input id="radialCollision" type="number" step="0.5" min="1" value="8.5"></div>
-        <div class="field"><label for="radialAlphaDecay">alpha decay</label><input id="radialAlphaDecay" type="number" step="0.001" value="0.018"></div>
-        <div class="field"><label for="radialVelocityDecay">vel. decay</label><input id="radialVelocityDecay" type="number" step="0.02" value="0.42"></div>
-        <div class="field"><label for="radialBackboneStr">backbone str.</label><input id="radialBackboneStr" type="number" step="0.05" value="0.88"></div>
-        <div class="field"><label for="chunkSize">chunk size</label><input id="chunkSize" type="number" step="10" min="1" value="40"></div>
+<!-- Settings panel -->
+<div class="panel" id="settingsPanel">
+  <div class="row2">
+    <div class="field">
+      <label for="layoutMode">Layout mode</label>
+      <select id="layoutMode">
+        <option value="radial" selected>Radial</option>
+        <option value="circular">Circular</option>
+        <option value="linear">Linear / arc</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="baseSpacing">Base spacing (px)</label>
+      <input id="baseSpacing" type="number" step="1" value="16" min="6">
+    </div>
+  </div>
+  <div class="panel-section">
+    <div class="row2">
+      <div class="field">
+        <label for="selectScope">Click selects</label>
+        <select id="selectScope">
+          <option value="node">Individual base</option>
+          <option value="stem">Stem</option>
+          <option value="loop">Loop</option>
+          <option value="strand">Strand</option>
+        </select>
       </div>
-      <div class="checks" style="margin-top:6px;">
-        <label><input id="radialAutoPolish" type="checkbox" checked> Auto-polish after layout</label>
+      <div class="field" style="display:flex;flex-direction:column;justify-content:flex-end;">
+        <button class="panel-btn" id="clearSelBtn" style="margin:0;width:100%;">Clear selection</button>
       </div>
-    </details>
-
+    </div>
+  </div>
+  <div class="panel-section">
     <div class="checks">
       <label><input id="showLabels" type="checkbox" checked> Show labels</label>
       <label><input id="showPairs" type="checkbox" checked> Show structure pairs</label>
       <label><input id="showBackbone" type="checkbox" checked> Show backbone</label>
+      <label><input id="showEndMarkers" type="checkbox" checked> Show 5&#x2032;/3&#x2032; end markers</label>
+      <label><input id="continuousSim" type="checkbox"> Continuous simulation</label>
       <label><input id="autoFit" type="checkbox" checked> Auto-fit after render</label>
     </div>
-
-    <div class="stats" id="stats">Ready.</div>
   </div>
-
-  <div class="viewer">
-    <svg id="svg"></svg>
-    <div class="status" id="status"><strong>IDLE</strong><br>zoom 100%</div>
-  </div>
+  <details id="radialDetails">
+    <summary>Radial refinement (rigid-body)</summary>
+    <div class="row3" style="margin-top:10px;">
+      <div class="field"><label for="radialTicks">polish ticks</label><input id="radialTicks" type="number" step="50" min="0" value="350"></div>
+      <div class="field"><label for="radialCharge">charge</label><input id="radialCharge" type="number" step="5" value="-55"></div>
+      <div class="field"><label for="radialCollision">collision r</label><input id="radialCollision" type="number" step="0.5" min="1" value="8.5"></div>
+      <div class="field"><label for="radialAlphaDecay">alpha decay</label><input id="radialAlphaDecay" type="number" step="0.001" value="0.018"></div>
+      <div class="field"><label for="radialVelocityDecay">vel. decay</label><input id="radialVelocityDecay" type="number" step="0.02" value="0.42"></div>
+      <div class="field"><label for="radialBackboneStr">backbone str.</label><input id="radialBackboneStr" type="number" step="0.05" value="0.88"></div>
+      <div class="field"><label for="chunkSize">chunk size</label><input id="chunkSize" type="number" step="10" min="1" value="40"></div>
+    </div>
+    <div class="checks" style="margin-top:6px;">
+      <label><input id="radialAutoPolish" type="checkbox" checked> Auto-polish after layout</label>
+    </div>
+  </details>
+  <div class="stats" id="stats">Ready.</div>
 </div>
 
 <script>
@@ -208,18 +249,20 @@
   const backboneLayer = root.append("g");
   const nodeLayer = root.append("g");
   const labelLayer = root.append("g");
+  const markerLayer = root.append("g");
 
   let width = 1200, height = 900;
   let simulation = null;
   let graph = null;
   let model = emptyModel();
-  let pairSel = null, backboneSel = null, nodeSel = null, labelSel = null;
+  let pairSel = null, backboneSel = null, nodeSel = null, labelSel = null, markerSel = null;
   let currentJobId = 0;
   let cancelRequested = false;
   let selectedNodes = new Set(); // Set of selected node IDs
   let features = null;           // built by buildStructuralFeatures after each render
   let wasDragged = false;        // distinguishes drag from click
   let dragGroupStart = null;     // { initX, initY, positions: Map<id,{x,y}> }
+  let liveSim = null;            // continuous simulation state
 
   function emptyModel() {
     return { title:"", sequenceStrands:[], structure:"", importedFormat:"", notes:[] };
@@ -843,6 +886,24 @@
                .attr("x2", d => linkNode(d.target).x).attr("y2", d => linkNode(d.target).y);
     nodeSel.attr("cx", d => d.x).attr("cy", d => d.y);
     labelSel.attr("x", d => d.x).attr("y", d => d.y - 9);
+    if (markerSel) {
+      const OFFSET = 14;
+      markerSel.attr("x", d => {
+        const n = graph.nodes[d.nodeId];
+        if (d.adjId == null) return n.x;
+        const a = graph.nodes[d.adjId];
+        const dx = n.x - a.x, dy = n.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        return n.x + (dx / len) * OFFSET;
+      }).attr("y", d => {
+        const n = graph.nodes[d.nodeId];
+        if (d.adjId == null) return n.y - OFFSET;
+        const a = graph.nodes[d.adjId];
+        const dx = n.x - a.x, dy = n.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        return n.y + (dy / len) * OFFSET;
+      });
+    }
     updateSelectionVisuals();
   }
 
@@ -905,7 +966,6 @@
 
   function dragStart(event, d) {
     wasDragged = false;
-    if (!event.active && simulation) simulation.alphaTarget(0.18).restart();
     const group = selectedNodes.has(d.id) ? [...selectedNodes] : [d.id];
     dragGroupStart = {
       initX: event.x, initY: event.y,
@@ -914,6 +974,21 @@
     for (const id of dragGroupStart.positions.keys()) {
       graph.nodes[id].fx = graph.nodes[id].x;
       graph.nodes[id].fy = graph.nodes[id].y;
+    }
+    if (liveSim) {
+      liveSim.sim.alpha(Math.max(liveSim.sim.alpha(), 0.5));
+      liveSim.pinnedVNodes.clear();
+      for (const id of dragGroupStart.positions.keys()) {
+        const si = liveSim.vg.stemOfNode.get(id);
+        const vi = si !== undefined ? liveSim.vg.stemVN[si] : liveSim.vg.loopVN.get(id);
+        if (vi !== undefined) {
+          liveSim.pinnedVNodes.add(vi);
+          liveSim.vg.vNodes[vi].fx = liveSim.vg.vNodes[vi].x;
+          liveSim.vg.vNodes[vi].fy = liveSim.vg.vNodes[vi].y;
+        }
+      }
+    } else if (!event.active && simulation) {
+      simulation.alphaTarget(0.18).restart();
     }
   }
   function dragged(event, d) {
@@ -926,13 +1001,33 @@
       graph.nodes[id].x = graph.nodes[id].fx;
       graph.nodes[id].y = graph.nodes[id].fy;
     }
+    if (liveSim) {
+      for (const vi of liveSim.pinnedVNodes) {
+        const vn = liveSim.vg.vNodes[vi];
+        if (vn.isStem) {
+          const stem = graph.stems[vn.stemIndex];
+          let cx = 0, cy = 0;
+          for (const p of stem) { cx += graph.nodes[p.a].x + graph.nodes[p.b].x; cy += graph.nodes[p.a].y + graph.nodes[p.b].y; }
+          vn.fx = cx / (stem.length * 2); vn.fy = cy / (stem.length * 2);
+        } else {
+          vn.fx = graph.nodes[vn.nodeId].x; vn.fy = graph.nodes[vn.nodeId].y;
+        }
+      }
+    }
     ticked();
   }
   function dragEnd(event, d) {
-    if (!event.active && simulation) simulation.alphaTarget(0);
     if (dragGroupStart) {
       for (const id of dragGroupStart.positions.keys()) {
         graph.nodes[id].fx = null; graph.nodes[id].fy = null;
+      }
+      if (liveSim) {
+        for (const vi of liveSim.pinnedVNodes) {
+          liveSim.vg.vNodes[vi].fx = null; liveSim.vg.vNodes[vi].fy = null;
+        }
+        liveSim.pinnedVNodes.clear();
+      } else if (!event.active && simulation) {
+        simulation.alphaTarget(0);
       }
       dragGroupStart = null;
     }
@@ -1070,12 +1165,16 @@
     // Backbone links collapsed to the virtual-node level.
     // Intra-stem links (both endpoints in the same stem) are dropped entirely —
     // the stem's internal geometry is maintained by enforceStemRigidity.
+    // Also track per-stem connections to external nodes for torque computation.
     const seen = new Set();
     const vLinks = [];
+    const stemConns = stems.map(() => []); // stemConns[si] = [{stemNodeId, otherNodeId}]
     for (const link of graph.backboneLinks) {
       const u = typeof link.source === 'number' ? link.source : link.source.id;
       const v = typeof link.target === 'number' ? link.target : link.target.id;
       const su = stemOfNode.get(u), sv = stemOfNode.get(v);
+      if (su !== undefined && su !== sv) stemConns[su].push({ stemNodeId: u, otherNodeId: v });
+      if (sv !== undefined && sv !== su) stemConns[sv].push({ stemNodeId: v, otherNodeId: u });
       const vu = su !== undefined ? stemVN[su] : loopVN.get(u);
       const vv = sv !== undefined ? stemVN[sv] : loopVN.get(v);
       if (vu === undefined || vv === undefined || vu === vv) continue;
@@ -1085,7 +1184,81 @@
       vLinks.push({ source: vu, target: vv });
     }
 
-    return { vNodes, vLinks, stemVN, loopVN };
+    return { vNodes, vLinks, stemVN, loopVN, stemConns, stemOfNode,
+             prevX: stemVN.map(vi => vNodes[vi].x),
+             prevY: stemVN.map(vi => vNodes[vi].y) };
+  }
+
+  // Single tick of the virtual‐graph ↔ actual‐node synchronisation.
+  // Translates stems, copies loop positions, applies torque, enforces rigidity,
+  // and syncs virtual nodes back. Shared by relaxRadial and the live sim loop.
+  function syncVirtualTick(vg, configs, omega) {
+    // 1. Translate each stem by its virtual node's displacement.
+    graph.stems.forEach((stem, si) => {
+      const vn = vg.vNodes[vg.stemVN[si]];
+      const dx = vn.x - vg.prevX[si], dy = vn.y - vg.prevY[si];
+      for (const p of stem) {
+        graph.nodes[p.a].x += dx; graph.nodes[p.a].y += dy;
+        graph.nodes[p.b].x += dx; graph.nodes[p.b].y += dy;
+      }
+    });
+    // 2. Copy loop‐node positions from their virtual nodes.
+    vg.loopVN.forEach((vi, nodeId) => {
+      graph.nodes[nodeId].x = vg.vNodes[vi].x;
+      graph.nodes[nodeId].y = vg.vNodes[vi].y;
+    });
+    // 2b. Torque: rotate stems from asymmetric backbone pulls.
+    graph.stems.forEach((stem, si) => {
+      const conns = vg.stemConns[si];
+      if (!conns.length) return;
+      let cx = 0, cy = 0;
+      for (const p of stem) {
+        cx += graph.nodes[p.a].x + graph.nodes[p.b].x;
+        cy += graph.nodes[p.a].y + graph.nodes[p.b].y;
+      }
+      cx /= stem.length * 2; cy /= stem.length * 2;
+      let moi = 0;
+      for (const p of stem) {
+        const dxa = graph.nodes[p.a].x - cx, dya = graph.nodes[p.a].y - cy;
+        const dxb = graph.nodes[p.b].x - cx, dyb = graph.nodes[p.b].y - cy;
+        moi += dxa * dxa + dya * dya + dxb * dxb + dyb * dyb;
+      }
+      moi = Math.max(moi, 1);
+      let torque = 0;
+      for (const c of conns) {
+        const sn = graph.nodes[c.stemNodeId], on = graph.nodes[c.otherNodeId];
+        const rx = sn.x - cx, ry = sn.y - cy;
+        const fx = on.x - sn.x, fy = on.y - sn.y;
+        torque += rx * fy - ry * fx;
+      }
+      omega[si] += torque * 0.0025 / moi;
+      omega[si] *= 0.82;
+      const angle = omega[si];
+      if (Math.abs(angle) > 1e-9) {
+        const cosA = Math.cos(angle), sinA = Math.sin(angle);
+        for (const p of stem) {
+          for (const id of [p.a, p.b]) {
+            const dx = graph.nodes[id].x - cx, dy = graph.nodes[id].y - cy;
+            graph.nodes[id].x = cx + dx * cosA - dy * sinA;
+            graph.nodes[id].y = cy + dx * sinA + dy * cosA;
+          }
+        }
+      }
+    });
+    // 3. Snap stems to rigid geometry.
+    enforceStemRigidity(graph.stems, graph.nodes, configs);
+    // 4. Sync virtual stem nodes back to actual centres.
+    graph.stems.forEach((stem, si) => {
+      let cx = 0, cy = 0;
+      for (const p of stem) {
+        cx += graph.nodes[p.a].x + graph.nodes[p.b].x;
+        cy += graph.nodes[p.a].y + graph.nodes[p.b].y;
+      }
+      cx /= stem.length * 2; cy /= stem.length * 2;
+      const vn = vg.vNodes[vg.stemVN[si]];
+      vn.x = cx; vn.y = cy;
+      vg.prevX[si] = cx; vg.prevY[si] = cy;
+    });
   }
 
   // Run the radial rigid-body force simulation using the virtual graph.
@@ -1103,11 +1276,6 @@
 
     const vg = buildStemVirtualGraph(graph);
 
-    // Snapshot of each stem virtual-node's position at the start of each tick,
-    // used to compute the rigid translation delta after the tick.
-    const prevX = vg.stemVN.map(vi => vg.vNodes[vi].x);
-    const prevY = vg.stemVN.map(vi => vg.vNodes[vi].y);
-
     const sim = d3.forceSimulation(vg.vNodes)
       .alpha(0.85).alphaDecay(aDecay).velocityDecay(vDecay)
       .force("charge",    d3.forceManyBody().strength(charge))
@@ -1117,6 +1285,7 @@
 
     simulation = sim;
     const rigidConfigs = buildStemRigidConfigs(graph.stems, graph.nodes);
+    const omega = graph.stems.map(() => 0); // angular velocity per stem
 
     let done = 0;
     while (done < ticks) {
@@ -1125,39 +1294,7 @@
 
       for (let i = 0; i < n; i++) {
         sim.tick();
-
-        // 1. Translate each stem cluster by the delta its virtual node moved.
-        graph.stems.forEach((stem, si) => {
-          const vn = vg.vNodes[vg.stemVN[si]];
-          const dx = vn.x - prevX[si], dy = vn.y - prevY[si];
-          for (const p of stem) {
-            graph.nodes[p.a].x += dx; graph.nodes[p.a].y += dy;
-            graph.nodes[p.b].x += dx; graph.nodes[p.b].y += dy;
-          }
-        });
-
-        // 2. Copy loop node positions directly from their virtual nodes.
-        vg.loopVN.forEach((vi, nodeId) => {
-          graph.nodes[nodeId].x = vg.vNodes[vi].x;
-          graph.nodes[nodeId].y = vg.vNodes[vi].y;
-        });
-
-        // 3. Snap stems to exact rigid geometry (preserves the translated centre).
-        enforceStemRigidity(graph.stems, graph.nodes, rigidConfigs);
-
-        // 4. Sync virtual stem nodes back to actual centres so the next tick
-        //    starts from consistent positions.
-        graph.stems.forEach((stem, si) => {
-          let cx = 0, cy = 0;
-          for (const p of stem) {
-            cx += graph.nodes[p.a].x + graph.nodes[p.b].x;
-            cy += graph.nodes[p.a].y + graph.nodes[p.b].y;
-          }
-          cx /= stem.length * 2; cy /= stem.length * 2;
-          const vn = vg.vNodes[vg.stemVN[si]];
-          vn.x = cx; vn.y = cy;
-          prevX[si] = cx; prevY[si] = cy;
-        });
+        syncVirtualTick(vg, rigidConfigs, omega);
       }
 
       done += n;
@@ -1197,6 +1334,7 @@
     if (!graph) return;
     const jobId = ++currentJobId;
     cancelRequested = false;
+    stopLiveSim();
     if (simulation) simulation.stop();
     setBusy(true);
     setProgress("busy", "Layout", 10, "Computing target positions…");
@@ -1226,6 +1364,7 @@
       if (jobId !== currentJobId || cancelRequested) return;
       if (el("autoFit").checked) fitView();
       setProgress("ok", "Layout applied", 100, `${newMode} layout.`);
+      if (el("continuousSim").checked) startLiveSim();
     } catch (err) {
       if (err.message !== "Operation cancelled.")
         setProgress("error", "Layout failed", 100, "", String(err.message || err));
@@ -1282,6 +1421,7 @@
       el("sequenceText").value = sequencePlus;
       el("structureText").value = structurePlus;
 
+      stopLiveSim();
       if (simulation) simulation.stop();
 
       setProgress("busy", "Preparing", 18, "Parsing structure...");
@@ -1321,6 +1461,19 @@
         .style("display", el("showLabels").checked ? null : "none")
         .text(d => d.seq || String(d.id + 1));
 
+      const markers = [];
+      graph.strandNodeIds.forEach((ids, si) => {
+        if (!ids || !ids.length) return;
+        markers.push({ nodeId: ids[0], adjId: ids.length > 1 ? ids[1] : null, text: "5\u2032", strand: si, key: `5-${si}` });
+        markers.push({ nodeId: ids[ids.length - 1], adjId: ids.length > 1 ? ids[ids.length - 2] : null, text: "3\u2032", strand: si, key: `3-${si}` });
+      });
+      markerSel = markerLayer.selectAll("text").data(markers, d => d.key);
+      markerSel.exit().remove();
+      markerSel = markerSel.enter().append("text").attr("class", "end-marker").merge(markerSel)
+        .text(d => d.text)
+        .attr("fill", d => STRAND_COLORS[d.strand % STRAND_COLORS.length])
+        .style("display", el("showEndMarkers").checked ? null : "none");
+
       ticked();
       updateStats();
       selectedNodes.clear();
@@ -1332,6 +1485,7 @@
       }
       if (el("autoFit").checked) fitView();
       setProgress("ok", "Render complete", 100, `Finished.\nNodes ${graph.nodes.length}, pairs ${graph.pairLinks.length}`);
+      if (el("continuousSim").checked) startLiveSim();
     } catch (err) {
       setProgress("error", "Render failed", 100, "Rendering aborted.", String(err.message || err));
     } finally { setBusy(false); }
@@ -1339,20 +1493,63 @@
 
   async function relaxAgain() {
     if (!graph) return;
+    stopLiveSim();
     const jobId = ++currentJobId;
     cancelRequested = false;
     setBusy(true);
     try {
       await relaxRadial(jobId);
       setProgress("ok", "Relax complete", 100, "Additional relaxation complete.");
+      if (el("continuousSim").checked) startLiveSim();
     } catch (err) {
       setProgress("error", "Relax failed", 100, "Relaxation aborted.", String(err.message || err));
     } finally { setBusy(false); }
   }
 
+  // ─── CONTINUOUS SIMULATION ────────────────────────────────────────────────
+
+  function startLiveSim() {
+    stopLiveSim();
+    if (!graph || !graph.stems.length) return;
+    const BD     = getBaseSpacing();
+    const charge = +el("radialCharge").value        || -55;
+    const vDecay = +el("radialVelocityDecay").value || 0.42;
+    const bStr   = +el("radialBackboneStr").value   || 0.88;
+    const vg      = buildStemVirtualGraph(graph);
+    const configs = buildStemRigidConfigs(graph.stems, graph.nodes);
+    const omega   = graph.stems.map(() => 0);
+    const sim = d3.forceSimulation(vg.vNodes)
+      .alpha(0.3).alphaDecay(0.008).alphaTarget(0.04).velocityDecay(vDecay)
+      .force("charge",    d3.forceManyBody().strength(charge))
+      .force("collision", d3.forceCollide(d => d.cr).strength(0.85))
+      .force("backbone",  d3.forceLink(vg.vLinks).distance(BD * 1.5).strength(bStr))
+      .stop();
+    simulation = sim;
+    liveSim = { vg, sim, configs, omega, rafId: null, pinnedVNodes: new Set() };
+    setProgress("busy", "Continuous", 50, "Live simulation running\u2026");
+    function loop() {
+      if (!liveSim) return;
+      liveSim.sim.tick();
+      syncVirtualTick(liveSim.vg, liveSim.configs, liveSim.omega);
+      ticked();
+      liveSim.rafId = requestAnimationFrame(loop);
+    }
+    liveSim.rafId = requestAnimationFrame(loop);
+  }
+
+  function stopLiveSim() {
+    if (!liveSim) return;
+    if (liveSim.rafId) cancelAnimationFrame(liveSim.rafId);
+    liveSim.sim.stop();
+    liveSim = null;
+    simulation = null;
+  }
+
   el("cancelBtn").addEventListener("click", () => {
     cancelRequested = true;
     currentJobId += 1;
+    stopLiveSim();
+    el("continuousSim").checked = false;
     if (simulation) simulation.stop();
     setProgress("error", "Cancelled", 100, "Operation cancelled by user.");
     setBusy(false);
@@ -1374,12 +1571,70 @@
   el("showLabels").addEventListener("change", () => { if (labelSel) labelSel.style("display", el("showLabels").checked ? null : "none"); });
   el("showPairs").addEventListener("change", () => { if (pairSel) pairSel.style("display", el("showPairs").checked ? null : "none"); });
   el("showBackbone").addEventListener("change", () => { if (backboneSel) backboneSel.style("display", el("showBackbone").checked ? null : "none"); });
+  el("showEndMarkers").addEventListener("change", () => { if (markerSel) markerSel.style("display", el("showEndMarkers").checked ? null : "none"); });
+  el("continuousSim").addEventListener("change", () => {
+    if (el("continuousSim").checked) startLiveSim();
+    else { stopLiveSim(); setProgress("ok", "Stopped", 100, "Continuous simulation stopped."); }
+    el("tbLive").classList.toggle("active", el("continuousSim").checked);
+  });
   el("inputText").value = `>tRNA-like example (multi-branch loop)
 GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA
 (((((((..((((........)))).(((((.......))))).....(((((.......))))))))))))....`;
   // Show/hide mode-specific panels based on default selection (radial).
   { el("radialDetails").style.display = getLayoutMode() === 'radial' ? null : "none"; }
   setProgress("idle", "Status", 0, "Ready.");
+
+  // ─── TOOLBAR PANEL & BUTTON WIRING ────────────────────────────────────────
+
+  function togglePanel(panelId, btnId) {
+    const panel = el(panelId);
+    const isOpen = panel.classList.contains("open");
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("open"));
+    el("tbInput").classList.remove("active");
+    el("tbSettings").classList.remove("active");
+    if (!isOpen) {
+      panel.classList.add("open");
+      el(btnId).classList.add("active");
+    }
+  }
+
+  el("tbInput").addEventListener("click", () => togglePanel("inputPanel", "tbInput"));
+  el("tbSettings").addEventListener("click", () => togglePanel("settingsPanel", "tbSettings"));
+
+  // Close panels on outside click
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".panel") && !e.target.closest(".toolbar")) {
+      document.querySelectorAll(".panel").forEach(p => p.classList.remove("open"));
+      el("tbInput").classList.remove("active");
+      el("tbSettings").classList.remove("active");
+    }
+  });
+
+  // Layout cycle button
+  const layoutModes = ["radial", "circular", "linear"];
+  const layoutLabels = { radial: "Radial", circular: "Circular", linear: "Linear" };
+  el("tbLayout").addEventListener("click", () => {
+    const cur = el("layoutMode").value;
+    const next = layoutModes[(layoutModes.indexOf(cur) + 1) % layoutModes.length];
+    el("layoutMode").value = next;
+    el("layoutMode").dispatchEvent(new Event("change"));
+    el("tbLayout").title = `Layout: ${layoutLabels[next]}`;
+  });
+  el("layoutMode").addEventListener("change", () => {
+    el("tbLayout").title = `Layout: ${layoutLabels[el("layoutMode").value] || el("layoutMode").value}`;
+  });
+
+  // Live sim toolbar toggle
+  el("tbLive").addEventListener("click", () => {
+    const cb = el("continuousSim");
+    cb.checked = !cb.checked;
+    cb.dispatchEvent(new Event("change"));
+  });
+
+  // Sync live button on cancel
+  el("cancelBtn").addEventListener("click", () => {
+    el("tbLive").classList.remove("active");
+  });
 })();
 </script>
 </body>
