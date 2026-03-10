@@ -608,7 +608,7 @@
     backboneSel.attr("x1", d => linkNode(d.source).x).attr("y1", d => linkNode(d.source).y)
                .attr("x2", d => linkNode(d.target).x).attr("y2", d => linkNode(d.target).y);
     nodeSel.attr("cx", d => d.x).attr("cy", d => d.y);
-    labelSel.attr("x", d => d.x).attr("y", d => d.y - 9);
+    labelSel.attr("x", d => d.x).attr("y", d => d.y);
     if (markerSel) {
       const OFFSET = 14;
       markerSel.attr("x", d => {
@@ -1139,7 +1139,7 @@
 
       nodeSel = nodeLayer.selectAll("circle").data(graph.nodes, d => d.id);
       nodeSel.exit().remove();
-      nodeSel = nodeSel.enter().append("circle").attr("r", 4.8).attr("class", "node").merge(nodeSel)
+      nodeSel = nodeSel.enter().append("circle").attr("r", 6).attr("class", "node").merge(nodeSel)
         .attr("fill", d => STRAND_COLORS[d.strand % STRAND_COLORS.length])
         .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
         .on("click", nodeClicked);

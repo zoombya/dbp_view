@@ -92,5 +92,5 @@ summary{cursor:pointer;font-size:12px;font-weight:700;}
 .pair{fill:none;stroke:var(--pair);stroke-width:2.0;stroke-linecap:round;opacity:.95;}
 .node{stroke:#111827;stroke-width:.8;}
 .node.selected{stroke:#f59e0b !important;stroke-width:2.5 !important;filter:drop-shadow(0 0 3px #f59e0b88);}
-.label{font-size:10px;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;}
+.label{font-size:7px;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;fill:#fff;font-weight:700;}
 .end-marker{font-size:9px;font-weight:700;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;}
