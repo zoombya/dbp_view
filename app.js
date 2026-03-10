@@ -214,14 +214,19 @@
 
   function pairsToBracketString(n, pairs) {
     const chars = Array(n).fill(".");
+    const placed = []; // {a, b, fi}
     for (const [a, b] of pairs.sort((x, y) => (x[0] - y[0]) || (y[1] - x[1]))) {
-      let placed = false;
-      for (const [op, cl] of BRACKET_FAMILIES) {
-        if (chars[a] === "." && chars[b] === ".") {
-          chars[a] = op; chars[b] = cl; placed = true; break;
-        }
+      // Determine which bracket families are forbidden due to crossing pairs
+      const forbidden = new Set();
+      for (const p of placed) {
+        if ((p.a < a && a < p.b && p.b < b) || (a < p.a && p.a < b && b < p.b))
+          forbidden.add(p.fi);
       }
-      if (!placed) { chars[a] = "("; chars[b] = ")"; }
+      let fi = 0;
+      for (; fi < BRACKET_FAMILIES.length; fi++) if (!forbidden.has(fi)) break;
+      const [op, cl] = BRACKET_FAMILIES[fi] || BRACKET_FAMILIES[0];
+      chars[a] = op; chars[b] = cl;
+      placed.push({a, b, fi});
     }
     return chars.join("");
   }
@@ -457,7 +462,7 @@
       let i = start;
       while (i !== end) {
         const partner = pt[i];
-        if (partner && i !== 0) {          // paired → stem
+        if (partner && i !== 0 && partner < end) { // paired → stem (skip pseudoknot crossings)
           nSlots += 2;
           let x = i, a = partner;
           pArr[++pairIdx] = x;
@@ -1080,6 +1085,13 @@
 
       updateStats();
       setProgress("ok", "Import complete", 100, `Loaded format: ${format}`);
+      // Close input panel and render immediately
+      document.querySelectorAll(".panel").forEach(p => p.classList.remove("open"));
+      el("tbInput").classList.remove("active");
+      el("tbSettings").classList.remove("active");
+      setBusy(false);
+      await renderGraph();
+      return;
     } catch (err) {
       setProgress("error", "Import failed", 100, "Import aborted.", String(err.message || err));
     } finally { setBusy(false); }
@@ -1310,5 +1322,35 @@ GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA
 
   el("cancelBtn").addEventListener("click", () => {
     el("tbLive").classList.remove("active");
+  });
+
+  // ─── Drag-and-drop file loading ────────────────────────────────────────────
+  const dropOverlay = el("dropOverlay");
+  let dragCounter = 0; // track nested dragenter/dragleave pairs
+
+  document.addEventListener("dragenter", e => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    if (++dragCounter === 1) dropOverlay.classList.add("active");
+  });
+  document.addEventListener("dragover", e => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+  });
+  document.addEventListener("dragleave", e => {
+    if (--dragCounter <= 0) { dragCounter = 0; dropOverlay.classList.remove("active"); }
+  });
+  document.addEventListener("drop", e => {
+    e.preventDefault();
+    dragCounter = 0;
+    dropOverlay.classList.remove("active");
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      el("inputText").value = ev.target.result;
+      importText();
+    };
+    reader.readAsText(file);
   });
 })();

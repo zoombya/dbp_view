@@ -71,6 +71,22 @@ summary{cursor:pointer;font-size:12px;font-weight:700;}
 .badge-idle{background:var(--muted);} .badge-busy{background:var(--busy);}
 .badge-ok{background:var(--ok);} .badge-err{background:var(--err);}
 
+/* ─── Drag-and-drop overlay ─── */
+.drop-overlay{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(37,99,235,.13);backdrop-filter:blur(2px);
+  border:3px dashed var(--busy);border-radius:0;
+  pointer-events:none;opacity:0;transition:opacity .15s;z-index:95;
+}
+.drop-overlay.active{opacity:1;pointer-events:auto;}
+.drop-overlay-inner{
+  display:flex;flex-direction:column;align-items:center;gap:12px;
+  background:rgba(255,255,255,.92);border-radius:20px;
+  padding:32px 48px;box-shadow:0 4px 28px rgba(0,0,0,.14);
+  color:var(--busy);font-weight:700;font-size:18px;
+}
+.drop-overlay-inner i{font-size:52px;}
+
 /* ─── SVG elements ─── */
 .backbone{stroke-width:2.2;stroke-linecap:round;}
 .pair{fill:none;stroke:var(--pair);stroke-width:2.0;stroke-linecap:round;opacity:.95;}
