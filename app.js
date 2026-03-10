@@ -517,7 +517,7 @@
           // walk inward to find stem length
           const y = i, v = partner;
           let x = i, a = partner, z = 0;
-          do { x++; a--; z++; } while (pt[x] === a);
+          do { x++; a--; z++; } while (x < a && pt[x] === a);
 
           let t = z - 2;
           if (z >= 2) {
