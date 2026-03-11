@@ -5,12 +5,12 @@
   <title>Secondary Structure Viewer</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <link rel="stylesheet" href="style.css">
-  <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
 <!-- Full-screen viewer -->
 <div class="viewer">
-  <svg id="svg"></svg>
+  <canvas id="glcanvas" style="width:100%;height:100%;display:block;cursor:grab;"></canvas>
+  <canvas id="overlaycanvas" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
   <div class="drop-overlay" id="dropOverlay">
     <div class="drop-overlay-inner">
       <i class="bi bi-file-earmark-arrow-up"></i>
@@ -173,6 +173,8 @@
   <div class="stats" id="stats">Ready.</div>
 </div>
 
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.162/build/three.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
