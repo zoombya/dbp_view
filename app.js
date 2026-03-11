@@ -55,6 +55,10 @@
   ];
   const OPENERS = new Set(BRACKET_FAMILIES.map(x => x[0]));
   const CLOSERS = new Map(BRACKET_FAMILIES.map(x => [x[1], x[0]]));
+  // Maps opener character → bracket family index (0 = nested scaffold)
+  const OPENER_FAMILY = new Map(BRACKET_FAMILIES.map((x, i) => [x[0], i]));
+  // Pseudoknot arc colors per family (families 1, 2, 3, …)
+  const PSEUDOKNOT_COLORS = ['#f59e0b','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f97316','#ec4899'];
 
   const el = id => document.getElementById(id);
 
@@ -431,7 +435,8 @@
         if (left == null) errors.push(`Unmatched ${ch} at structure index ${i}.`);
         else {
           const a = structureIndexToNode.get(left), b = node.id;
-          pairLinks.push({source:a, target:b, kind:"pair"});
+          const fi = OPENER_FAMILY.get(opener) ?? 0;
+          pairLinks.push({source:a, target:b, kind:"pair", family:fi});
           pairByNode.set(a, b); pairByNode.set(b, a);
         }
       } else if (ch !== ".") errors.push(`Unsupported structure symbol "${ch}" at index ${i}.`);
@@ -441,8 +446,13 @@
       for (const idx of arr) errors.push(`Unmatched ${op} at structure index ${idx}.`);
     }
 
+    // Nested-only views: family-0 pairs form the non-crossing scaffold used for radial layout
+    const nestedPairLinks  = pairLinks.filter(p => p.family === 0);
+    const nestedPairByNode = new Map();
+    for (const p of nestedPairLinks) { nestedPairByNode.set(p.source, p.target); nestedPairByNode.set(p.target, p.source); }
+
     const stems = buildStems(pairLinks);
-    return { nodes, pairLinks, backboneLinks, pairByNode, nickAfterNode, strandNodeIds, errors, stems };
+    return { nodes, pairLinks, nestedPairLinks, backboneLinks, pairByNode, nestedPairByNode, nickAfterNode, strandNodeIds, errors, stems };
   }
 
   function buildStems(pairLinks) {
@@ -849,12 +859,15 @@
       if (ids.length > bestLen) { bestLen = ids.length; startNode = ids[0]; }
     }
 
+    // Use only nested (non-crossing) pairs for the layout scaffold
+    const layoutPairs = graph.nestedPairByNode;
+
     // ── WASM fast path ──────────────────────────────────────────────────────
     let pos;
     if (wasm) {
       const pt = new Int32Array(N + 1);
       pt[0] = N;
-      for (const [i, j] of graph.pairByNode) {
+      for (const [i, j] of layoutPairs) {
         pt[((i - startNode + N) % N) + 1] = ((j - startNode + N) % N) + 1;
       }
       const flat = wasm.forna_radial_positions(pt, N, BD, 0);
@@ -862,7 +875,7 @@
       for (let i = 0; i < N; i++) pos[(i + startNode) % N] = [flat[i * 2], flat[i * 2 + 1]];
     } else {
       // ── JS fallback ───────────────────────────────────────────────────────
-      pos = fornaRadialPositions(graph.pairByNode, N, BD, startNode);
+      pos = fornaRadialPositions(layoutPairs, N, BD, startNode);
     }
 
     // Centre on viewport
@@ -894,8 +907,8 @@
     const spread = Math.max(...hx.map((x, i) => Math.hypot(x - gcx, hy[i] - gcy)));
     if (spread < 8) { await layoutRadial(graph); return; }
 
-    // Compute fresh forna positions
-    const pos = fornaRadialPositions(graph.pairByNode, N, BD);
+    // Compute fresh forna positions (nested scaffold only)
+    const pos = fornaRadialPositions(graph.nestedPairByNode, N, BD);
     let fx = 0, fy = 0;
     for (let i = 0; i < N; i++) { fx += pos[i][0]; fy += pos[i][1]; }
     fx /= N; fy /= N;
@@ -950,11 +963,11 @@
       backboneLines.geometry.setDrawRange(0, BL.length * 2);
     }
 
-    // ── pairs ──
+    // ── pairs (nested/family-0 only; pseudoknot arcs drawn in Canvas2D overlay) ──
     {
       const pPos = pairLines.geometry.attributes.position.array;
       const pCol = pairLines.geometry.attributes.color.array;
-      const PL   = graph.pairLinks;
+      const PL   = graph.nestedPairLinks;
       let vi = 0;
       for (const lk of PL) {
         const src = nodes[lk.source], tgt = nodes[lk.target];
@@ -1003,6 +1016,45 @@
 
     const nodeR  = 6 * glZoom;
     const byElem = el("colorByElement").checked && classification;
+
+    // ── Pseudoknot arcs (family > 0 pairs) ──
+    const pseudoPairs = graph.pairLinks.filter(p => p.family > 0);
+    if (pseudoPairs.length && el("showPairs").checked) {
+      // Structure centroid for outward-offset direction
+      let gcx = 0, gcy = 0;
+      for (const n of graph.nodes) { gcx += n.x; gcy += n.y; }
+      gcx /= graph.nodes.length; gcy /= graph.nodes.length;
+
+      const BD = getBaseSpacing();
+      ctx.save();
+      ctx.setLineDash([4 * glZoom, 3 * glZoom]);
+      ctx.lineWidth = Math.max(1, 1.4 * glZoom);
+      for (const lk of pseudoPairs) {
+        const src = graph.nodes[lk.source], tgt = graph.nodes[lk.target];
+        const [sx, sy] = worldToScreen(...graphToWorld(src.x, src.y));
+        const [tx, ty] = worldToScreen(...graphToWorld(tgt.x, tgt.y));
+        // Chord midpoint
+        const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+        // Perpendicular to the chord
+        const cdx = tx - sx, cdy = ty - sy;
+        const perp = Math.hypot(cdx, cdy) || 1;
+        let px = -cdy / perp, py = cdx / perp;
+        // Flip so the arc bows away from the structure centroid (in screen space)
+        const [gcsx, gcsy] = worldToScreen(...graphToWorld(gcx, gcy));
+        if ((mx - gcsx) * px + (my - gcsy) * py < 0) { px = -px; py = -py; }
+        // Arc height: base offset + fraction of chord length
+        const chord = Math.hypot(cdx, cdy);
+        const h = Math.max(BD * 2 * glZoom, chord * 0.35 + BD * 1.5 * glZoom);
+        const cpx = mx + px * h, cpy = my + py * h;
+        const color = PSEUDOKNOT_COLORS[(lk.family - 1) % PSEUDOKNOT_COLORS.length];
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.quadraticCurveTo(cpx, cpy, tx, ty);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     // ── Nodes ──
     ctx.lineWidth = 0.8;
@@ -1085,7 +1137,7 @@
   function buildThreeObjects(graph) {
     disposeThreeObjects();
     const BL = graph.backboneLinks.length;
-    const PL = graph.pairLinks.length;
+    const PL = graph.nestedPairLinks.length; // only nested (family-0) pairs in WebGL; pseudoknots drawn on Canvas2D
     const BEZIER_SEGS = 12;
 
     // Backbone

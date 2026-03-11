@@ -58,6 +58,20 @@ export function compute_mld(stems_flat, stem_offsets) {
 /**
  * @param {Int32Array} pair_table
  * @param {number} n
+ * @returns {Int32Array}
+ */
+export function extract_non_crossing(pair_table, n) {
+    const ptr0 = passArray32ToWasm0(pair_table, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.extract_non_crossing(ptr0, len0, n);
+    var v2 = getArrayI32FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v2;
+}
+
+/**
+ * @param {Int32Array} pair_table
+ * @param {number} n
  * @param {number} bd
  * @param {number} _rot_node
  * @returns {Float64Array}

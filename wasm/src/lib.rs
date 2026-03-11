@@ -44,7 +44,7 @@ pub fn forna_radial_positions(pair_table: &[i32], n: usize, bd: f64, _rot_node: 
         while i != end {
             // pair_table is 1-indexed; index 0 holds N
             let partner = if i == 0 || i > n { 0 } else { pair_table[i] as usize };
-            if partner != 0 && i != 0 && partner < end {
+            if partner != 0 && i != 0 && partner < end && partner > i {
                 // Paired position — not a pseudoknot crossing
                 n_slots += 2;
                 pair_idx += 1;
@@ -352,4 +352,47 @@ pub fn compute_mld(stems_flat: &[i32], stem_offsets: &[i32]) -> f64 {
         }
     }
     mld
+}
+
+// ─── D. Extract non-crossing pair scaffold ────────────────────────────────────
+//
+// Given a 1-indexed pair table (pair_table[0]=N, pair_table[i]=1-indexed partner
+// or 0 if unpaired), returns a new pair table containing only the maximum
+// non-crossing subset of base pairs, using an outermost-first greedy selection.
+//
+// This is used as a fallback when a structure is encoded entirely in one bracket
+// family but happens to contain crossing pairs. The JS caller normally handles
+// the non-crossing split by bracket family before calling forna_radial_positions,
+// but this Rust function is available for general use.
+
+#[wasm_bindgen]
+pub fn extract_non_crossing(pair_table: &[i32], n: usize) -> Vec<i32> {
+    // Collect all forward pairs (i < j)
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 1..=n {
+        if i >= pair_table.len() { break; }
+        let j = pair_table[i] as usize;
+        if j > i { pairs.push((i, j)); }
+    }
+
+    // Sort by span descending (outermost / largest-span pairs first).
+    // Greedy selection: include a pair unless it crosses an already-included one.
+    pairs.sort_by(|a, b| (b.1 - b.0).cmp(&(a.1 - a.0)));
+
+    let mut result = vec![0i32; n + 1];
+    result[0] = n as i32;
+    let mut included: Vec<(usize, usize)> = Vec::new();
+
+    for &(a, b) in &pairs {
+        // Two pairs (a,b) and (x,y) cross iff (x < a < y < b) or (a < x < b < y)
+        let crosses = included.iter().any(|&(x, y)| {
+            (x < a && a < y && y < b) || (a < x && x < b && b < y)
+        });
+        if !crosses {
+            result[a] = b as i32;
+            result[b] = a as i32;
+            included.push((a, b));
+        }
+    }
+    result
 }
