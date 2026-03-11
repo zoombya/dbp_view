@@ -805,11 +805,25 @@
 
   // ─── THREE.JS RENDER FUNCTIONS ────────────────────────────────────────────
 
+  function applyNodeColors() {
+    if (!nodeInstMesh || !graph) return;
+    const nodes  = graph.nodes;
+    const byElem = el("colorByElement").checked && classification;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const base = byElem
+        ? (_elemC[classification.elementType[i]] || _strandC[n.strand % _strandC.length])
+        : _strandC[n.strand % _strandC.length];
+      if (selectedNodes.has(i)) _c3.set(0xf59e0b); else _c3.copy(base);
+      nodeInstMesh.setColorAt(i, _c3);
+    }
+    if (nodeInstMesh.instanceColor) nodeInstMesh.instanceColor.needsUpdate = true;
+  }
+
   function ticked() {
     if (!nodeInstMesh || !graph) return;
     const nodes  = graph.nodes;
     const N      = nodes.length;
-    const byElem = el("colorByElement").checked && classification;
     const mode   = getLayoutMode();
     const BEZIER_SEGS = 12;
 
@@ -820,15 +834,9 @@
       _dummy.position.set(wx, wy, 0);
       _dummy.updateMatrix();
       nodeInstMesh.setMatrixAt(i, _dummy.matrix);
-      const sc = byElem
-        ? (_elemC[classification.elementType[i]] || _strandC[n.strand % _strandC.length])
-        : _strandC[n.strand % _strandC.length];
-      // Highlight selected nodes amber
-      if (selectedNodes.has(i)) _c3.set(0xf59e0b); else _c3.copy(sc);
-      nodeInstMesh.setColorAt(i, _c3);
     }
     nodeInstMesh.instanceMatrix.needsUpdate = true;
-    if (nodeInstMesh.instanceColor) nodeInstMesh.instanceColor.needsUpdate = true;
+    applyNodeColors();
 
     // ── backbone ──
     {
@@ -1034,17 +1042,7 @@
 
   function updateSelectionVisuals() {
     if (!nodeInstMesh || !graph) return;
-    // Re-color selected nodes amber in the instanced mesh
-    for (let i = 0; i < graph.nodes.length; i++) {
-      const n  = graph.nodes[i];
-      const byElem = el("colorByElement").checked && classification;
-      const sc = byElem
-        ? (_elemC[classification.elementType[i]] || _strandC[n.strand % _strandC.length])
-        : _strandC[n.strand % _strandC.length];
-      if (selectedNodes.has(i)) _c3.set(0xf59e0b); else _c3.copy(sc);
-      nodeInstMesh.setColorAt(i, _c3);
-    }
-    if (nodeInstMesh.instanceColor) nodeInstMesh.instanceColor.needsUpdate = true;
+    applyNodeColors();
     glRenderer.render(glScene, glCamera);
     drawOverlay();
   }
@@ -1053,7 +1051,7 @@
 
   function pickNode(wx, wy) {
     if (!graph) return null;
-    const R2 = (10 / glZoom) ** 2;
+    const R2 = 7 ** 2; // node world-space radius = 6 (CircleGeometry), +1 margin
     let best = null, bestD = Infinity;
     for (const n of graph.nodes) {
       const [nwx, nwy] = graphToWorld(n.x, n.y);
@@ -1710,7 +1708,7 @@
   el("showEndMarkers").addEventListener("change", () => { if (graph) drawOverlay(); });
   el("colorByElement").addEventListener("change", () => {
     el("elementLegend").style.display = el("colorByElement").checked ? "" : "none";
-    if (graph) ticked();
+    if (graph) { applyNodeColors(); glRenderer.render(glScene, glCamera); drawOverlay(); }
   });
 
   el("continuousSim").addEventListener("change", () => {
