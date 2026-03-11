@@ -4,6 +4,15 @@
     "#4d7c0f","#0ea5e9","#7c3aed","#059669","#dc2626"
   ];
 
+  // Element-type palette (RiboGraphViz-inspired): stem / hairpin / internal loop / junction / external
+  const ELEMENT_COLORS = {
+    stem:     "#4f46e5",
+    hairpin:  "#ea580c",
+    internal: "#16a34a",
+    junction: "#dc2626",
+    external: "#9ca3af"
+  };
+
   const BRACKET_FAMILIES = [
     ["(", ")"], ["[", "]"], ["{", "}"], ["<", ">"],
     ["A", "a"], ["B", "b"], ["C", "c"], ["D", "d"], ["E", "e"], ["F", "f"],
@@ -33,6 +42,7 @@
   let cancelRequested = false;
   let selectedNodes = new Set();
   let features = null;
+  let classification = null;
   let wasDragged = false;
   let dragGroupStart = null;
   let liveSim = null;
@@ -407,6 +417,98 @@
     return { nodeToStem, nodeToLoop, loops };
   }
 
+  // ─── STRUCTURAL CLASSIFICATION (RiboGraphViz-inspired) ────────────────────
+  // Classifies each stem's inner region as hairpin / internal loop / n-way junction
+  // and computes MLD (Maximum Ladder Distance: longest chain of stacked base pairs).
+  function classifyStructure(graph) {
+    const stems = graph.stems;
+    if (!stems.length) return null;
+    const N = graph.nodes.length;
+
+    // Sort stems outermost-first (largest span first)
+    const sm = stems.map((s, i) => ({ i, a: s[0].a, b: s[0].b, len: s.length }))
+      .sort((x, y) => (x.a - y.a) || (y.b - x.b));
+
+    // Build immediate-parent / children relationships via nesting containment
+    const parent   = new Int32Array(sm.length).fill(-1);
+    const children = sm.map(() => []);
+    for (let i = 0; i < sm.length; i++) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (sm[j].a < sm[i].a && sm[j].b > sm[i].b) {
+          parent[i] = j; children[j].push(i); break;
+        }
+      }
+    }
+
+    // MLD: longest path of cumulative stem-pair depth
+    const depth = new Float64Array(sm.length);
+    let mld = 0;
+    for (let i = 0; i < sm.length; i++) {
+      const d = depth[i] + sm[i].len;
+      if (d > mld) mld = d;
+      for (const c of children[i]) if (depth[c] < d) depth[c] = d;
+    }
+
+    // Loop classification by stem's inner region child count
+    let hairpins = 0, internalLoops = 0;
+    const junctions = {};
+    for (let i = 0; i < sm.length; i++) {
+      const nc = children[i].length;
+      if      (nc === 0) hairpins++;
+      else if (nc === 1) internalLoops++;
+      else { const n = nc + 1; junctions[n] = (junctions[n] || 0) + 1; }
+    }
+
+    // Per-node element type
+    const elementType = new Array(N).fill("external");
+    for (const s of sm) {
+      for (const { a, b } of stems[s.i]) {
+        elementType[a] = "stem";
+        elementType[b] = "stem";
+      }
+    }
+    for (let id = 0; id < N; id++) {
+      if (elementType[id] === "stem") continue;
+      let best = -1;
+      for (let i = 0; i < sm.length; i++) {
+        if (sm[i].a < id && sm[i].b > id && (best < 0 || sm[i].a > sm[best].a)) best = i;
+      }
+      if (best < 0) continue;
+      const nc = children[best].length;
+      elementType[id] = nc === 0 ? "hairpin" : nc === 1 ? "internal" : "junction";
+    }
+
+    return { hairpins, internalLoops, junctions, mld, elementType };
+  }
+
+  // Rotate all nodes so the structure's principal axis is horizontal (PCA),
+  // then flip if the 5′ end ends up on the right.
+  function alignCanonical(graph) {
+    const nodes = graph.nodes;
+    const N = nodes.length;
+    if (N < 2) return;
+    let mx = 0, my = 0;
+    for (const n of nodes) { mx += n.x; my += n.y; }
+    mx /= N; my /= N;
+    let cxx = 0, cxy = 0, cyy = 0;
+    for (const n of nodes) {
+      const dx = n.x - mx, dy = n.y - my;
+      cxx += dx * dx; cxy += dx * dy; cyy += dy * dy;
+    }
+    // Closed-form principal-axis angle from 2×2 symmetric covariance matrix
+    const angle = Math.atan2(2 * cxy, cxx - cyy) / 2;
+    const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+    for (const n of nodes) {
+      const dx = n.x - mx, dy = n.y - my;
+      n.x = mx + dx * cosA - dy * sinA;
+      n.y = my + dx * sinA + dy * cosA;
+    }
+    // Keep 5′ end on the left
+    if (nodes[0] && nodes[0].x > mx) {
+      for (const n of nodes) n.x = 2 * mx - n.x;
+    }
+  }
+
   function connectedComponents(n, edges) {
     const adj = Array.from({length:n}, () => []);
     for (const e of edges) {
@@ -712,6 +814,14 @@
       `strands: ${model.sequenceStrands.length}`,
       `pairs: ${graph ? graph.pairLinks.length : 0}`
     ];
+    if (classification) {
+      lines.push(`stems: ${graph.stems.length}   MLD: ${classification.mld}`);
+      lines.push(`hairpins: ${classification.hairpins}   internal loops: ${classification.internalLoops}`);
+      const jKeys = Object.keys(classification.junctions).sort((a, b) => +a - +b);
+      if (jKeys.length) {
+        lines.push("junctions: " + jKeys.map(n => `${n}-way ×${classification.junctions[n]}`).join("   "));
+      }
+    }
     if (graph?.errors.length) lines.push("errors:\n- " + graph.errors.join("\n- "));
     if (model.notes.length) lines.push("notes:\n- " + model.notes.join("\n- "));
     el("stats").textContent = lines.join("\n");
@@ -1188,6 +1298,7 @@
 
       setProgress("busy", "Preparing", 18, "Parsing structure...");
       graph = parseDotBracketPlus(sequencePlus, structurePlus);
+      classification = null;
 
       const layoutMode = getLayoutMode();
       setProgress("busy", "Preparing", 28, `Applying ${layoutMode} layout...`);
@@ -1198,6 +1309,11 @@
       } else if (layoutMode === 'radial') {
         layoutRadial(graph);
       }
+      if (el("alignCanonical").checked) alignCanonical(graph);
+
+      // Structural classification (RiboGraphViz-style) — needed for coloring + stats
+      features = buildStructuralFeatures(graph);
+      classification = classifyStructure(graph);
 
       pairSel = pairLayer.selectAll("path").data(graph.pairLinks, d => `${d.source}-${d.target}`);
       pairSel.exit().remove();
@@ -1213,7 +1329,9 @@
       nodeSel = nodeLayer.selectAll("circle").data(graph.nodes, d => d.id);
       nodeSel.exit().remove();
       nodeSel = nodeSel.enter().append("circle").attr("r", 6).attr("class", "node").merge(nodeSel)
-        .attr("fill", d => STRAND_COLORS[d.strand % STRAND_COLORS.length])
+        .attr("fill", d => el("colorByElement").checked && classification
+          ? (ELEMENT_COLORS[classification.elementType[d.id]] || STRAND_COLORS[d.strand % STRAND_COLORS.length])
+          : STRAND_COLORS[d.strand % STRAND_COLORS.length])
         .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
         .on("click", nodeClicked);
 
@@ -1239,7 +1357,6 @@
       ticked();
       updateStats();
       selectedNodes.clear();
-      features = buildStructuralFeatures(graph);
       updateSelectionVisuals();
       if (layoutMode === 'radial' && el("radialAutoPolish").checked) {
         await relaxRadial(jobId);
@@ -1338,6 +1455,13 @@
   el("showPairs").addEventListener("change", () => { if (pairSel) pairSel.style("display", el("showPairs").checked ? null : "none"); });
   el("showBackbone").addEventListener("change", () => { if (backboneSel) backboneSel.style("display", el("showBackbone").checked ? null : "none"); });
   el("showEndMarkers").addEventListener("change", () => { if (markerSel) markerSel.style("display", el("showEndMarkers").checked ? null : "none"); });
+  el("colorByElement").addEventListener("change", () => {
+    el("elementLegend").style.display = el("colorByElement").checked ? "" : "none";
+    if (!nodeSel) return;
+    nodeSel.attr("fill", d => el("colorByElement").checked && classification
+      ? (ELEMENT_COLORS[classification.elementType[d.id]] || STRAND_COLORS[d.strand % STRAND_COLORS.length])
+      : STRAND_COLORS[d.strand % STRAND_COLORS.length]);
+  });
   el("continuousSim").addEventListener("change", () => {
     if (el("continuousSim").checked) startLiveSim();
     else { stopLiveSim(); setProgress("ok", "Stopped", 100, "Continuous simulation stopped."); }
