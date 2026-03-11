@@ -25,19 +25,11 @@
   const CLOSERS = new Map(BRACKET_FAMILIES.map(x => [x[1], x[0]]));
 
   const el = id => document.getElementById(id);
-  const svg = d3.select("#svg");
-  const root = svg.append("g");
-  const pairLayer = root.append("g");
-  const backboneLayer = root.append("g");
-  const nodeLayer = root.append("g");
-  const labelLayer = root.append("g");
-  const markerLayer = root.append("g");
 
   let width = 1200, height = 900;
   let simulation = null;
   let graph = null;
   let model = emptyModel();
-  let pairSel = null, backboneSel = null, nodeSel = null, labelSel = null, markerSel = null;
   let currentJobId = 0;
   let cancelRequested = false;
   let selectedNodes = new Set();
@@ -51,44 +43,91 @@
     return { title:"", sequenceStrands:[], structure:"", importedFormat:"", notes:[] };
   }
 
-  const zoom = d3.zoom()
-    .scaleExtent([0.03, 30])
-    .on("start", () => svg.classed("dragging", true))
-    .on("zoom", (event) => {
-      root.attr("transform", event.transform);
-      const scalePct = Math.round(event.transform.k * 100);
-      const badge = el("progressBadge").textContent;
-      el("status").innerHTML = `<strong>${badge}</strong><br>zoom ${scalePct}%`;
-    })
-    .on("end", () => svg.classed("dragging", false));
-  svg.call(zoom);
+  // ─── THREE.JS RENDERER ───────────────────────────────────────────────────────
+  const _glCanvas = document.getElementById('glcanvas');
+  const _ovCanvas = document.getElementById('overlaycanvas');
+  const _ovCtx    = _ovCanvas.getContext('2d');
+
+  const glRenderer = new THREE.WebGLRenderer({ canvas: _glCanvas, antialias: true });
+  glRenderer.setClearColor(0xf3f4f6, 1);
+
+  const glScene  = new THREE.Scene();
+  // OrthographicCamera: world space = graph pixel space, Y-up (negate Y vs screen Y)
+  const glCamera = new THREE.OrthographicCamera(-600, 600, 450, -450, -100, 100);
+  glCamera.position.set(0, 0, 10);
+
+  // Camera state: zoom factor + pan in WORLD units
+  let glZoom = 1, glPanX = 0, glPanY = 0;
+
+  // Three.js objects (rebuilt on each renderGraph)
+  let backboneLines = null, pairLines = null;
+
+  // Pre-allocated reusables for backbone/pair vertex colors
+  const _strandC = STRAND_COLORS.map(s => new THREE.Color(s));
+  const _pairC   = new THREE.Color('#1d4ed8');
+
+  function graphToWorld(gx, gy)  { return [gx - width/2, height/2 - gy]; }
+  function worldToGraph(wx, wy)  { return [wx + width/2, height/2 - wy]; }
+  function screenToWorld(sx, sy) { return [(sx - width/2) / glZoom + glPanX,  -(sy - height/2) / glZoom + glPanY]; }
+  function worldToScreen(wx, wy) { return [(wx - glPanX) * glZoom + width/2, -(wy - glPanY) * glZoom + height/2]; }
+  function screenToGraph(sx, sy) { const [wx,wy] = screenToWorld(sx,sy); return worldToGraph(wx,wy); }
+
+  function updateCamera() {
+    const hw = width  / 2 / glZoom;
+    const hh = height / 2 / glZoom;
+    glCamera.left   = glPanX - hw;  glCamera.right  = glPanX + hw;
+    glCamera.top    = glPanY + hh;  glCamera.bottom = glPanY - hh;
+    glCamera.updateProjectionMatrix();
+  }
+
+  function updateStatusZoom() {
+    const scalePct = Math.round(glZoom * 100);
+    const badge    = el("progressBadge").textContent;
+    el("status").innerHTML = `<strong>${badge}</strong><br>zoom ${scalePct}%`;
+  }
+
+  function animateCameraTo(tPanX, tPanY, tZoom, duration) {
+    const s0x = glPanX, s0y = glPanY, s0z = glZoom;
+    const t0  = performance.now();
+    (function step(now) {
+      const t    = Math.min(1, (now - t0) / Math.max(1, duration));
+      const ease = 1 - Math.pow(1 - t, 3);
+      glPanX = s0x + (tPanX - s0x) * ease;
+      glPanY = s0y + (tPanY - s0y) * ease;
+      glZoom = s0z + (tZoom  - s0z) * ease;
+      updateCamera();
+      if (!liveSim) ticked();
+      updateStatusZoom();
+      if (t < 1) requestAnimationFrame(step);
+    })(t0);
+  }
 
   function resize() {
     const r = document.querySelector(".viewer").getBoundingClientRect();
-    width = r.width;
+    width  = r.width;
     height = r.height;
-    svg.attr("viewBox", `0 0 ${width} ${height}`);
+    glRenderer.setPixelRatio(window.devicePixelRatio);
+    glRenderer.setSize(width, height, false);
+    _ovCanvas.width  = width  * window.devicePixelRatio;
+    _ovCanvas.height = height * window.devicePixelRatio;
+    _ovCanvas.style.width  = width  + 'px';
+    _ovCanvas.style.height = height + 'px';
+    _ovCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    updateCamera();
+    if (graph) ticked();
   }
   window.addEventListener("resize", resize);
   resize();
 
   // ─── AUTO-CENTERING ───────────────────────────────────────────────────────
 
-  // Pan the camera (preserving current zoom scale) so the structure's centroid
-  // sits at the viewport centre.  Uses a short transition for smoothness.
   function centerView(duration = 200) {
     if (!graph || !graph.nodes.length) return;
     const xs = graph.nodes.map(d => d.x), ys = graph.nodes.map(d => d.y);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
     const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    const k = d3.zoomTransform(svg.node()).k;
-    const tx = width / 2 - k * cx;
-    const ty = height / 2 - k * cy;
-    if (duration > 0) {
-      svg.transition().duration(duration).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
-    } else {
-      svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
-    }
+    const [tpx, tpy] = graphToWorld(cx, cy);
+    animateCameraTo(tpx, tpy, glZoom, duration);
   }
 
   // ─── PROGRESS / BUSY ──────────────────────────────────────────────────────
@@ -760,71 +799,195 @@
     applyLoopTension(graph, tension);
   }
 
-  // ─── RENDERING HELPERS ────────────────────────────────────────────────────
-
-  function pairPathD(src, tgt, mode) {
-    if (mode === 'linear') {
-      const mx = (src.x + tgt.x) / 2;
-      const span = Math.abs(tgt.x - src.x);
-      const h = Math.max(10, span * 0.5);
-      return `M${src.x},${src.y}Q${mx},${src.y - h} ${tgt.x},${tgt.y}`;
-    }
-    return `M${src.x},${src.y}L${tgt.x},${tgt.y}`;
-  }
-
-  function linkNode(endpoint) {
-    return typeof endpoint === 'number' ? graph.nodes[endpoint] : endpoint;
-  }
+  // ─── THREE.JS RENDER FUNCTIONS ────────────────────────────────────────────
 
   function ticked() {
-    if (!pairSel) return;
-    const mode = getLayoutMode();
-    pairSel.attr("d", d => pairPathD(linkNode(d.source), linkNode(d.target), mode));
-    backboneSel.attr("x1", d => linkNode(d.source).x).attr("y1", d => linkNode(d.source).y)
-               .attr("x2", d => linkNode(d.target).x).attr("y2", d => linkNode(d.target).y);
-    nodeSel.attr("cx", d => d.x).attr("cy", d => d.y);
-    labelSel.attr("x", d => d.x).attr("y", d => d.y);
-    if (markerSel) {
-      const OFFSET = 14;
-      markerSel.attr("x", d => {
-        const n = graph.nodes[d.nodeId];
-        if (d.adjId == null) return n.x;
-        const a = graph.nodes[d.adjId];
-        const dx = n.x - a.x, dy = n.y - a.y;
-        const len = Math.hypot(dx, dy) || 1;
-        return n.x + (dx / len) * OFFSET;
-      }).attr("y", d => {
-        const n = graph.nodes[d.nodeId];
-        if (d.adjId == null) return n.y - OFFSET;
-        const a = graph.nodes[d.adjId];
-        const dx = n.x - a.x, dy = n.y - a.y;
-        const len = Math.hypot(dx, dy) || 1;
-        return n.y + (dy / len) * OFFSET;
-      });
+    if (!backboneLines || !graph) return;
+    const nodes  = graph.nodes;
+    const mode   = getLayoutMode();
+    const BEZIER_SEGS = 12;
+
+    // ── backbone ──
+    {
+      const bPos = backboneLines.geometry.attributes.position.array;
+      const bCol = backboneLines.geometry.attributes.color.array;
+      const BL   = graph.backboneLinks;
+      for (let i = 0; i < BL.length; i++) {
+        const s = nodes[BL[i].source], t = nodes[BL[i].target];
+        const [sx,sy] = graphToWorld(s.x, s.y);
+        const [tx,ty] = graphToWorld(t.x, t.y);
+        const ci = i * 6;
+        bPos[ci]=sx; bPos[ci+1]=sy; bPos[ci+2]=0;
+        bPos[ci+3]=tx; bPos[ci+4]=ty; bPos[ci+5]=0;
+        const c = _strandC[s.strand % _strandC.length];
+        bCol[ci]=c.r; bCol[ci+1]=c.g; bCol[ci+2]=c.b;
+        bCol[ci+3]=c.r; bCol[ci+4]=c.g; bCol[ci+5]=c.b;
+      }
+      backboneLines.geometry.attributes.position.needsUpdate = true;
+      backboneLines.geometry.attributes.color.needsUpdate    = true;
+      backboneLines.geometry.setDrawRange(0, BL.length * 2);
     }
-    updateSelectionVisuals();
+
+    // ── pairs ──
+    {
+      const pPos = pairLines.geometry.attributes.position.array;
+      const pCol = pairLines.geometry.attributes.color.array;
+      const PL   = graph.pairLinks;
+      let vi = 0;
+      for (const lk of PL) {
+        const src = nodes[lk.source], tgt = nodes[lk.target];
+        if (mode === 'linear') {
+          const mx   = (src.x + tgt.x) / 2;
+          const span = Math.abs(tgt.x - src.x);
+          const h    = Math.max(10, span * 0.5);
+          const cpx  = mx, cpy = src.y - h;
+          for (let s = 0; s < BEZIER_SEGS; s++) {
+            const t0 = s / BEZIER_SEGS, t1 = (s + 1) / BEZIER_SEGS;
+            for (const tt of [t0, t1]) {
+              const ot = 1 - tt;
+              const gx = ot*ot*src.x + 2*ot*tt*cpx + tt*tt*tgt.x;
+              const gy = ot*ot*src.y + 2*ot*tt*cpy + tt*tt*tgt.y;
+              const [wx,wy] = graphToWorld(gx, gy);
+              pPos[vi*3]=wx; pPos[vi*3+1]=wy; pPos[vi*3+2]=0;
+              pCol[vi*3]=_pairC.r; pCol[vi*3+1]=_pairC.g; pCol[vi*3+2]=_pairC.b;
+              vi++;
+            }
+          }
+        } else {
+          const [sx,sy] = graphToWorld(src.x, src.y);
+          const [tx,ty] = graphToWorld(tgt.x, tgt.y);
+          pPos[vi*3]=sx; pPos[vi*3+1]=sy; pPos[vi*3+2]=0;
+          pCol[vi*3]=_pairC.r; pCol[vi*3+1]=_pairC.g; pCol[vi*3+2]=_pairC.b; vi++;
+          pPos[vi*3]=tx; pPos[vi*3+1]=ty; pPos[vi*3+2]=0;
+          pCol[vi*3]=_pairC.r; pCol[vi*3+1]=_pairC.g; pCol[vi*3+2]=_pairC.b; vi++;
+        }
+      }
+      pairLines.geometry.attributes.position.needsUpdate = true;
+      pairLines.geometry.attributes.color.needsUpdate    = true;
+      pairLines.geometry.setDrawRange(0, vi);
+    }
+
+    glRenderer.render(glScene, glCamera);
+    drawOverlay();
   }
 
-  function updateStats() {
-    const seqLen = model.sequenceStrands.reduce((a, s) => a + s.length, 0);
-    const lines = [
-      `format: ${model.importedFormat || "manual"}`,
-      `title: ${model.title || "-"}`,
-      `bases: ${seqLen}`,
-      `strands: ${model.sequenceStrands.length}`,
-      `pairs: ${graph ? graph.pairLinks.length : 0}`
-    ];
-    if (classification) {
-      lines.push(`stems: ${graph.stems.length}   MLD: ${classification.mld}`);
-      lines.push(`hairpins: ${classification.hairpins}   internal loops: ${classification.internalLoops}`);
-      const jKeys = Object.keys(classification.junctions).sort((a, b) => +a - +b);
-      if (jKeys.length) {
-        lines.push("junctions: " + jKeys.map(n => `${n}-way ×${classification.junctions[n]}`).join("   "));
+  function drawOverlay() {
+    if (!graph) return;
+    const ctx = _ovCtx;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const nodeR  = 6 * glZoom;
+    const byElem = el("colorByElement").checked && classification;
+
+    // ── Nodes ──
+    ctx.lineWidth = 0.8;
+    for (const n of graph.nodes) {
+      const [sx, sy] = worldToScreen(...graphToWorld(n.x, n.y));
+      if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
+      if (selectedNodes.has(n.id)) {
+        ctx.fillStyle   = '#f59e0b';
+        ctx.strokeStyle = '#f59e0b';
+        ctx.shadowColor = '#f59e0b88';
+        ctx.shadowBlur  = 4;
+      } else {
+        ctx.fillStyle   = byElem
+          ? (ELEMENT_COLORS[classification.elementType[n.id]] || STRAND_COLORS[n.strand % STRAND_COLORS.length])
+          : STRAND_COLORS[n.strand % STRAND_COLORS.length];
+        ctx.strokeStyle = '#111827';
+        ctx.shadowBlur  = 0;
+      }
+      ctx.beginPath();
+      ctx.arc(sx, sy, nodeR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+
+    // Labels
+    if (el("showLabels").checked) {
+      const fs = Math.max(4, 7 * glZoom);
+      ctx.font = `700 ${fs}px system-ui,Arial,sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      for (const n of graph.nodes) {
+        const [sx, sy] = worldToScreen(...graphToWorld(n.x, n.y));
+        if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
+        ctx.fillText(n.seq || String(n.id + 1), sx, sy);
       }
     }
-    if (graph?.errors.length) lines.push("errors:\n- " + graph.errors.join("\n- "));
-    if (model.notes.length) lines.push("notes:\n- " + model.notes.join("\n- "));
-    el("stats").textContent = lines.join("\n");
+
+    // End markers (5′ / 3′)
+    if (el("showEndMarkers").checked) {
+      const OFFSET = 14;
+      const fs = Math.max(6, 9 * glZoom);
+      ctx.font = `700 ${fs}px system-ui,Arial,sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      graph.strandNodeIds.forEach((ids, si) => {
+        if (!ids || !ids.length) return;
+        ctx.fillStyle   = STRAND_COLORS[si % STRAND_COLORS.length];
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 * glZoom;
+        for (const [nodeId, adjId, text] of [
+          [ids[0],            ids.length > 1 ? ids[1]              : null, "5\u2032"],
+          [ids[ids.length-1], ids.length > 1 ? ids[ids.length - 2] : null, "3\u2032"]
+        ]) {
+          const n = graph.nodes[nodeId];
+          let mx = n.x, my = n.y;
+          if (adjId != null) {
+            const a = graph.nodes[adjId];
+            const dx = n.x - a.x, dy = n.y - a.y, len = Math.hypot(dx, dy) || 1;
+            mx += (dx / len) * OFFSET; my += (dy / len) * OFFSET;
+          } else { my -= OFFSET; }
+          const [sx, sy] = worldToScreen(...graphToWorld(mx, my));
+          ctx.strokeText(text, sx, sy);
+          ctx.fillText(text, sx, sy);
+        }
+      });
+    }
+
+    ctx.restore();
+  }
+
+  function disposeThreeObjects() {
+    for (const obj of [backboneLines, pairLines]) {
+      if (!obj) continue;
+      glScene.remove(obj);
+      obj.geometry?.dispose();
+      obj.material?.dispose();
+    }
+    backboneLines = pairLines = null;
+  }
+
+  function buildThreeObjects(graph) {
+    disposeThreeObjects();
+    const BL = graph.backboneLinks.length;
+    const PL = graph.pairLinks.length;
+    const BEZIER_SEGS = 12;
+
+    // Backbone
+    const bPos = new Float32Array(BL * 6);
+    const bCol = new Float32Array(BL * 6);
+    const bGeo = new THREE.BufferGeometry();
+    bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3).setUsage(THREE.DynamicDrawUsage));
+    bGeo.setAttribute('color',    new THREE.BufferAttribute(bCol, 3).setUsage(THREE.DynamicDrawUsage));
+    backboneLines = new THREE.LineSegments(bGeo, new THREE.LineBasicMaterial({ vertexColors: true }));
+    backboneLines.frustumCulled = false;
+    backboneLines.visible = el("showBackbone").checked;
+    glScene.add(backboneLines);
+
+    // Pairs — allocate for worst-case Bezier
+    const segsPerPair = BEZIER_SEGS; // always allocate for linear mode
+    const pPos = new Float32Array(PL * segsPerPair * 2 * 3);
+    const pCol = new Float32Array(PL * segsPerPair * 2 * 3);
+    const pGeo = new THREE.BufferGeometry();
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage));
+    pGeo.setAttribute('color',    new THREE.BufferAttribute(pCol, 3).setUsage(THREE.DynamicDrawUsage));
+    pairLines = new THREE.LineSegments(pGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: 0.95, transparent: true }));
+    pairLines.frustumCulled = false;
+    pairLines.visible = el("showPairs").checked;
+    glScene.add(pairLines);
   }
 
   function fitView() {
@@ -832,114 +995,182 @@
     const xs = graph.nodes.map(d => d.x), ys = graph.nodes.map(d => d.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const pad = 60;
-    const dx = Math.max(1, maxX - minX + 2 * pad), dy = Math.max(1, maxY - minY + 2 * pad);
-    const scale = Math.min(30, 0.94 / Math.max(dx / width, dy / height));
-    const tx = width / 2 - scale * (minX + maxX) / 2;
-    const ty = height / 2 - scale * (minY + maxY) / 2;
-    svg.transition().duration(250).call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+    const pad  = 60;
+    const gw   = maxX - minX + 2 * pad, gh = maxY - minY + 2 * pad;
+    const zoom = Math.min(30, 0.94 / Math.max(gw / width, gh / height));
+    const [tpx, tpy] = graphToWorld((minX + maxX) / 2, (minY + maxY) / 2);
+    animateCameraTo(tpx, tpy, zoom, 250);
   }
 
-  function resetZoom() { svg.transition().duration(250).call(zoom.transform, d3.zoomIdentity); }
+  function resetZoom() { animateCameraTo(0, 0, 1, 250); }
 
-  // ─── SELECTION & DRAG ─────────────────────────────────────────────────────
+  // ─── SELECTION ─────────────────────────────────────────────────────────────
 
   function updateSelectionVisuals() {
-    if (!nodeSel) return;
-    nodeSel.classed("selected", d => selectedNodes.has(d.id));
+    if (!graph) return;
+    glRenderer.render(glScene, glCamera);
+    drawOverlay();
   }
 
-  function nodeClicked(event, d) {
-    if (wasDragged) return;
-    event.stopPropagation();
-    const scope = el("selectScope").value;
-    let ids = [d.id];
-    if (scope === 'stem') {
-      const si = features ? features.nodeToStem.get(d.id) : undefined;
-      if (si !== undefined) ids = graph.stems[si].flatMap(p => [p.a, p.b]);
-    } else if (scope === 'loop') {
-      const li = features ? features.nodeToLoop.get(d.id) : undefined;
-      if (li !== undefined) ids = features.loops[li].nodeIds.slice();
-    } else if (scope === 'strand') {
-      const strandIdx = graph.nodes[d.id].strand;
-      ids = graph.strandNodeIds[strandIdx] || ids;
+  // ─── CANVAS INTERACTION ───────────────────────────────────────────────────────
+
+  function pickNode(wx, wy) {
+    if (!graph) return null;
+    const R2 = 7 ** 2; // node world-space radius = 6, +1 unit margin
+    let best = null, bestD = Infinity;
+    for (const n of graph.nodes) {
+      const [nwx, nwy] = graphToWorld(n.x, n.y);
+      const d = (nwx-wx)**2 + (nwy-wy)**2;
+      if (d < R2 && d < bestD) { best = n; bestD = d; }
     }
-    if (!event.shiftKey) selectedNodes.clear();
-    for (const id of ids) {
-      if (event.shiftKey && selectedNodes.has(id)) selectedNodes.delete(id);
-      else selectedNodes.add(id);
-    }
-    updateSelectionVisuals();
+    return best;
   }
 
-  function dragStart(event, d) {
+  let _isPanning = false, _panSX = 0, _panSY = 0, _panPX = 0, _panPY = 0;
+  let _isDragging = false;
+
+  _glCanvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.85 : 1 / 0.85;
+    const [wx, wy] = screenToWorld(e.offsetX, e.offsetY);
+    const nz = Math.max(0.03, Math.min(30, glZoom * factor));
+    glPanX = wx - (wx - glPanX) * (glZoom / nz);
+    glPanY = wy - (wy - glPanY) * (glZoom / nz);
+    glZoom = nz;
+    updateCamera();
+    if (!liveSim) ticked();
+    updateStatusZoom();
+  }, { passive: false });
+
+  _glCanvas.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
     wasDragged = false;
-    const group = selectedNodes.has(d.id) ? [...selectedNodes] : [d.id];
-    dragGroupStart = {
-      initX: event.x, initY: event.y,
-      positions: new Map(group.map(id => [id, { x: graph.nodes[id].x, y: graph.nodes[id].y }]))
-    };
-    for (const id of dragGroupStart.positions.keys()) {
-      graph.nodes[id].fx = graph.nodes[id].x;
-      graph.nodes[id].fy = graph.nodes[id].y;
-    }
-    if (liveSim) {
-      liveSim.sim.alpha(Math.max(liveSim.sim.alpha(), 0.5));
-      liveSim.pinnedVNodes.clear();
+    const [wx, wy] = screenToWorld(e.offsetX, e.offsetY);
+    const node = pickNode(wx, wy);
+    if (node) {
+      // Node drag
+      _isDragging = true;
+      const [gx, gy] = worldToGraph(wx, wy);
+      const group = selectedNodes.has(node.id) ? [...selectedNodes] : [node.id];
+      dragGroupStart = {
+        initX: gx, initY: gy,
+        positions: new Map(group.map(id => [id, { x: graph.nodes[id].x, y: graph.nodes[id].y }]))
+      };
       for (const id of dragGroupStart.positions.keys()) {
-        const si = liveSim.vg.stemOfNode.get(id);
-        const vi = si !== undefined ? liveSim.vg.stemVN[si] : liveSim.vg.loopVN.get(id);
-        if (vi !== undefined) {
-          liveSim.pinnedVNodes.add(vi);
-          liveSim.vg.vNodes[vi].fx = liveSim.vg.vNodes[vi].x;
-          liveSim.vg.vNodes[vi].fy = liveSim.vg.vNodes[vi].y;
-        }
+        graph.nodes[id].fx = graph.nodes[id].x;
+        graph.nodes[id].fy = graph.nodes[id].y;
       }
-    } else if (!event.active && simulation) {
-      simulation.alphaTarget(0.18).restart();
-    }
-  }
-  function dragged(event, d) {
-    wasDragged = true;
-    if (!dragGroupStart) return;
-    const dx = event.x - dragGroupStart.initX, dy = event.y - dragGroupStart.initY;
-    for (const [id, pos] of dragGroupStart.positions) {
-      graph.nodes[id].fx = pos.x + dx;
-      graph.nodes[id].fy = pos.y + dy;
-      graph.nodes[id].x = graph.nodes[id].fx;
-      graph.nodes[id].y = graph.nodes[id].fy;
-    }
-    if (liveSim) {
-      for (const vi of liveSim.pinnedVNodes) {
-        const vn = liveSim.vg.vNodes[vi];
-        if (vn.isStem) {
-          const stem = graph.stems[vn.stemIndex];
-          let cx = 0, cy = 0;
-          for (const p of stem) { cx += graph.nodes[p.a].x + graph.nodes[p.b].x; cy += graph.nodes[p.a].y + graph.nodes[p.b].y; }
-          vn.fx = cx / (stem.length * 2); vn.fy = cy / (stem.length * 2);
-        } else {
-          vn.fx = graph.nodes[vn.nodeId].x; vn.fy = graph.nodes[vn.nodeId].y;
+      if (liveSim) {
+        liveSim.sim.alpha(Math.max(liveSim.sim.alpha(), 0.5));
+        liveSim.pinnedVNodes.clear();
+        for (const id of dragGroupStart.positions.keys()) {
+          const si = liveSim.vg.stemOfNode.get(id);
+          const vi = si !== undefined ? liveSim.vg.stemVN[si] : liveSim.vg.loopVN.get(id);
+          if (vi !== undefined) {
+            liveSim.pinnedVNodes.add(vi);
+            liveSim.vg.vNodes[vi].fx = liveSim.vg.vNodes[vi].x;
+            liveSim.vg.vNodes[vi].fy = liveSim.vg.vNodes[vi].y;
+          }
         }
+      } else if (simulation) {
+        simulation.alphaTarget(0.18).restart();
       }
+      _glCanvas.style.cursor = 'grabbing';
+    } else {
+      // Pan
+      _isPanning = true;
+      _panSX = e.offsetX; _panSY = e.offsetY;
+      _panPX = glPanX;    _panPY = glPanY;
+      _glCanvas.style.cursor = 'grabbing';
     }
-    ticked();
-  }
-  function dragEnd(event, d) {
-    if (dragGroupStart) {
-      for (const id of dragGroupStart.positions.keys()) {
-        graph.nodes[id].fx = null; graph.nodes[id].fy = null;
+    _glCanvas.setPointerCapture(e.pointerId);
+  });
+
+  _glCanvas.addEventListener("pointermove", e => {
+    if (_isPanning) {
+      const dx = e.offsetX - _panSX, dy = e.offsetY - _panSY;
+      glPanX = _panPX - dx / glZoom;
+      glPanY = _panPY + dy / glZoom;
+      updateCamera();
+      ticked();
+      return;
+    }
+    if (_isDragging && dragGroupStart) {
+      wasDragged = true;
+      const [gx, gy] = screenToGraph(e.offsetX, e.offsetY);
+      const dx = gx - dragGroupStart.initX, dy = gy - dragGroupStart.initY;
+      for (const [id, pos] of dragGroupStart.positions) {
+        graph.nodes[id].fx = pos.x + dx;
+        graph.nodes[id].fy = pos.y + dy;
+        graph.nodes[id].x  = graph.nodes[id].fx;
+        graph.nodes[id].y  = graph.nodes[id].fy;
       }
       if (liveSim) {
         for (const vi of liveSim.pinnedVNodes) {
-          liveSim.vg.vNodes[vi].fx = null; liveSim.vg.vNodes[vi].fy = null;
+          const vn = liveSim.vg.vNodes[vi];
+          if (vn.isStem) {
+            const stem = graph.stems[vn.stemIndex];
+            let cx = 0, cy = 0;
+            for (const p of stem) { cx += graph.nodes[p.a].x + graph.nodes[p.b].x; cy += graph.nodes[p.a].y + graph.nodes[p.b].y; }
+            vn.fx = cx / (stem.length * 2); vn.fy = cy / (stem.length * 2);
+          } else {
+            vn.fx = graph.nodes[vn.nodeId].x; vn.fy = graph.nodes[vn.nodeId].y;
+          }
         }
-        liveSim.pinnedVNodes.clear();
-      } else if (!event.active && simulation) {
-        simulation.alphaTarget(0);
       }
-      dragGroupStart = null;
+      ticked();
     }
-  }
+  });
+
+  _glCanvas.addEventListener("pointerup", e => {
+    if (_isPanning) { _isPanning = false; _glCanvas.style.cursor = 'grab'; }
+    if (_isDragging) {
+      _isDragging = false;
+      _glCanvas.style.cursor = 'grab';
+      if (dragGroupStart) {
+        for (const id of dragGroupStart.positions.keys()) {
+          graph.nodes[id].fx = null; graph.nodes[id].fy = null;
+        }
+        if (liveSim) {
+          for (const vi of liveSim.pinnedVNodes) {
+            liveSim.vg.vNodes[vi].fx = null; liveSim.vg.vNodes[vi].fy = null;
+          }
+          liveSim.pinnedVNodes.clear();
+        } else if (simulation) {
+          simulation.alphaTarget(0);
+        }
+        dragGroupStart = null;
+      }
+    }
+    _glCanvas.releasePointerCapture(e.pointerId);
+  });
+
+  _glCanvas.addEventListener("click", e => {
+    if (wasDragged) { wasDragged = false; return; }
+    const [wx, wy] = screenToWorld(e.offsetX, e.offsetY);
+    const node = pickNode(wx, wy);
+    if (!node) {
+      if (!e.shiftKey) { selectedNodes.clear(); updateSelectionVisuals(); }
+      return;
+    }
+    const scope = el("selectScope").value;
+    let ids = [node.id];
+    if (scope === 'stem') {
+      const si = features ? features.nodeToStem.get(node.id) : undefined;
+      if (si !== undefined) ids = graph.stems[si].flatMap(p => [p.a, p.b]);
+    } else if (scope === 'loop') {
+      const li = features ? features.nodeToLoop.get(node.id) : undefined;
+      if (li !== undefined) ids = features.loops[li].nodeIds.slice();
+    } else if (scope === 'strand') {
+      ids = graph.strandNodeIds[node.strand] || ids;
+    }
+    if (!e.shiftKey) selectedNodes.clear();
+    for (const id of ids) {
+      if (e.shiftKey && selectedNodes.has(id)) selectedNodes.delete(id);
+      else selectedNodes.add(id);
+    }
+    updateSelectionVisuals();
+  });
 
   // ─── STEM RIGIDITY ───────────────────────────────────────────────────────
 
@@ -1315,46 +1546,9 @@
       features = buildStructuralFeatures(graph);
       classification = classifyStructure(graph);
 
-      pairSel = pairLayer.selectAll("path").data(graph.pairLinks, d => `${d.source}-${d.target}`);
-      pairSel.exit().remove();
-      pairSel = pairSel.enter().append("path").attr("class", "pair").merge(pairSel)
-        .style("display", el("showPairs").checked ? null : "none");
-
-      backboneSel = backboneLayer.selectAll("line").data(graph.backboneLinks, d => `${d.source}-${d.target}`);
-      backboneSel.exit().remove();
-      backboneSel = backboneSel.enter().append("line").attr("class", "backbone").merge(backboneSel)
-        .style("display", el("showBackbone").checked ? null : "none")
-        .attr("stroke", d => STRAND_COLORS[graph.nodes[d.source].strand % STRAND_COLORS.length]);
-
-      nodeSel = nodeLayer.selectAll("circle").data(graph.nodes, d => d.id);
-      nodeSel.exit().remove();
-      nodeSel = nodeSel.enter().append("circle").attr("r", 6).attr("class", "node").merge(nodeSel)
-        .attr("fill", d => el("colorByElement").checked && classification
-          ? (ELEMENT_COLORS[classification.elementType[d.id]] || STRAND_COLORS[d.strand % STRAND_COLORS.length])
-          : STRAND_COLORS[d.strand % STRAND_COLORS.length])
-        .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
-        .on("click", nodeClicked);
-
-      labelSel = labelLayer.selectAll("text").data(graph.nodes, d => d.id);
-      labelSel.exit().remove();
-      labelSel = labelSel.enter().append("text").attr("class", "label").merge(labelSel)
-        .style("display", el("showLabels").checked ? null : "none")
-        .text(d => d.seq || String(d.id + 1));
-
-      const markers = [];
-      graph.strandNodeIds.forEach((ids, si) => {
-        if (!ids || !ids.length) return;
-        markers.push({ nodeId: ids[0], adjId: ids.length > 1 ? ids[1] : null, text: "5\u2032", strand: si, key: `5-${si}` });
-        markers.push({ nodeId: ids[ids.length - 1], adjId: ids.length > 1 ? ids[ids.length - 2] : null, text: "3\u2032", strand: si, key: `3-${si}` });
-      });
-      markerSel = markerLayer.selectAll("text").data(markers, d => d.key);
-      markerSel.exit().remove();
-      markerSel = markerSel.enter().append("text").attr("class", "end-marker").merge(markerSel)
-        .text(d => d.text)
-        .attr("fill", d => STRAND_COLORS[d.strand % STRAND_COLORS.length])
-        .style("display", el("showEndMarkers").checked ? null : "none");
-
+      buildThreeObjects(graph);
       ticked();
+
       updateStats();
       selectedNodes.clear();
       updateSelectionVisuals();
@@ -1384,6 +1578,28 @@
     } catch (err) {
       setProgress("error", "Relax failed", 100, "Relaxation aborted.", String(err.message || err));
     } finally { setBusy(false); }
+  }
+
+  function updateStats() {
+    const seqLen = model.sequenceStrands.reduce((a, s) => a + s.length, 0);
+    const lines = [
+      `format: ${model.importedFormat || "manual"}`,
+      `title: ${model.title || "-"}`,
+      `bases: ${seqLen}`,
+      `strands: ${model.sequenceStrands.length}`,
+      `pairs: ${graph ? graph.pairLinks.length : 0}`
+    ];
+    if (classification) {
+      lines.push(`stems: ${graph.stems.length}   MLD: ${classification.mld}`);
+      lines.push(`hairpins: ${classification.hairpins}   internal loops: ${classification.internalLoops}`);
+      const jKeys = Object.keys(classification.junctions).sort((a, b) => +a - +b);
+      if (jKeys.length) {
+        lines.push("junctions: " + jKeys.map(n => `${n}-way ×${classification.junctions[n]}`).join("   "));
+      }
+    }
+    if (graph?.errors.length) lines.push("errors:\n- " + graph.errors.join("\n- "));
+    if (model.notes.length) lines.push("notes:\n- " + model.notes.join("\n- "));
+    el("stats").textContent = lines.join("\n");
   }
 
   // ─── CONTINUOUS SIMULATION ────────────────────────────────────────────────
@@ -1451,17 +1667,15 @@
 
   el("clearSelBtn").addEventListener("click", () => { selectedNodes.clear(); updateSelectionVisuals(); });
 
-  el("showLabels").addEventListener("change", () => { if (labelSel) labelSel.style("display", el("showLabels").checked ? null : "none"); });
-  el("showPairs").addEventListener("change", () => { if (pairSel) pairSel.style("display", el("showPairs").checked ? null : "none"); });
-  el("showBackbone").addEventListener("change", () => { if (backboneSel) backboneSel.style("display", el("showBackbone").checked ? null : "none"); });
-  el("showEndMarkers").addEventListener("change", () => { if (markerSel) markerSel.style("display", el("showEndMarkers").checked ? null : "none"); });
+  el("showLabels").addEventListener("change",     () => { if (graph) ticked(); });
+  el("showPairs").addEventListener("change",      () => { if (pairLines)     { pairLines.visible     = el("showPairs").checked;     glRenderer.render(glScene, glCamera); } });
+  el("showBackbone").addEventListener("change",   () => { if (backboneLines) { backboneLines.visible  = el("showBackbone").checked;  glRenderer.render(glScene, glCamera); } });
+  el("showEndMarkers").addEventListener("change", () => { if (graph) drawOverlay(); });
   el("colorByElement").addEventListener("change", () => {
     el("elementLegend").style.display = el("colorByElement").checked ? "" : "none";
-    if (!nodeSel) return;
-    nodeSel.attr("fill", d => el("colorByElement").checked && classification
-      ? (ELEMENT_COLORS[classification.elementType[d.id]] || STRAND_COLORS[d.strand % STRAND_COLORS.length])
-      : STRAND_COLORS[d.strand % STRAND_COLORS.length]);
+    if (graph) { glRenderer.render(glScene, glCamera); drawOverlay(); }
   });
+
   el("continuousSim").addEventListener("change", () => {
     if (el("continuousSim").checked) startLiveSim();
     else { stopLiveSim(); setProgress("ok", "Stopped", 100, "Continuous simulation stopped."); }
