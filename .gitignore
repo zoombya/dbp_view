@@ -32,7 +32,7 @@ dist/
 *.tmp
 
 # WASM build output (binary excluded; JS glue is committed)
-pkg/*.wasm
+# pkg/*.wasm  — included for GitHub Pages; only the .d.ts and package.json are excluded
 pkg/dbv_wasm_bg.wasm.d.ts
 pkg/package.json
 wasm/target/
