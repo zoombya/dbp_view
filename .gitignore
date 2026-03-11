@@ -30,3 +30,9 @@ dist/
 # Misc
 *.log
 *.tmp
+
+# WASM build output (binary excluded; JS glue is committed)
+pkg/*.wasm
+pkg/dbv_wasm_bg.wasm.d.ts
+pkg/package.json
+wasm/target/
