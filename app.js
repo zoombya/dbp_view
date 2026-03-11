@@ -917,6 +917,25 @@
       }
     }
 
+    // Selection rings
+    if (selectedNodes.size > 0) {
+      const ringR = 6 * glZoom + 2.5;
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth   = 2.5;
+      ctx.shadowColor = '#f59e0b88';
+      ctx.shadowBlur  = 6;
+      for (const id of selectedNodes) {
+        const n = graph.nodes[id];
+        if (!n) continue;
+        const [sx, sy] = worldToScreen(...graphToWorld(n.x, n.y));
+        if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
+        ctx.beginPath();
+        ctx.arc(sx, sy, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+    }
+
     // End markers (5′ / 3′)
     if (el("showEndMarkers").checked) {
       const OFFSET = 14;
