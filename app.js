@@ -60,15 +60,11 @@
   let glZoom = 1, glPanX = 0, glPanY = 0;
 
   // Three.js objects (rebuilt on each renderGraph)
-  let nodeInstMesh = null, backboneLines = null, pairLines = null;
+  let backboneLines = null, pairLines = null;
 
-  // Pre-allocated reusables (avoid GC in ticked)
-  const _dummy   = new THREE.Object3D();
-  const _c3      = new THREE.Color();
+  // Pre-allocated reusables for backbone/pair vertex colors
   const _strandC = STRAND_COLORS.map(s => new THREE.Color(s));
-  const _elemC   = Object.fromEntries(Object.entries(ELEMENT_COLORS).map(([k,v]) => [k, new THREE.Color(v)]));
   const _pairC   = new THREE.Color('#1d4ed8');
-  const _backboneC = STRAND_COLORS.map(s => new THREE.Color(s)); // same as strand
 
   function graphToWorld(gx, gy)  { return [gx - width/2, height/2 - gy]; }
   function worldToGraph(wx, wy)  { return [wx + width/2, height/2 - wy]; }
@@ -805,38 +801,11 @@
 
   // ─── THREE.JS RENDER FUNCTIONS ────────────────────────────────────────────
 
-  function applyNodeColors() {
-    if (!nodeInstMesh || !graph) return;
-    const nodes  = graph.nodes;
-    const byElem = el("colorByElement").checked && classification;
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i];
-      const base = byElem
-        ? (_elemC[classification.elementType[i]] || _strandC[n.strand % _strandC.length])
-        : _strandC[n.strand % _strandC.length];
-      if (selectedNodes.has(i)) _c3.set(0xf59e0b); else _c3.copy(base);
-      nodeInstMesh.setColorAt(i, _c3);
-    }
-    if (nodeInstMesh.instanceColor) nodeInstMesh.instanceColor.needsUpdate = true;
-  }
-
   function ticked() {
-    if (!nodeInstMesh || !graph) return;
+    if (!backboneLines || !graph) return;
     const nodes  = graph.nodes;
-    const N      = nodes.length;
     const mode   = getLayoutMode();
     const BEZIER_SEGS = 12;
-
-    // ── nodes ──
-    for (let i = 0; i < N; i++) {
-      const n = nodes[i];
-      const [wx, wy] = graphToWorld(n.x, n.y);
-      _dummy.position.set(wx, wy, 0);
-      _dummy.updateMatrix();
-      nodeInstMesh.setMatrixAt(i, _dummy.matrix);
-    }
-    nodeInstMesh.instanceMatrix.needsUpdate = true;
-    applyNodeColors();
 
     // ── backbone ──
     {
@@ -910,7 +879,32 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    const nodeR = 6 * glZoom;
+    const nodeR  = 6 * glZoom;
+    const byElem = el("colorByElement").checked && classification;
+
+    // ── Nodes ──
+    ctx.lineWidth = 0.8;
+    for (const n of graph.nodes) {
+      const [sx, sy] = worldToScreen(...graphToWorld(n.x, n.y));
+      if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
+      if (selectedNodes.has(n.id)) {
+        ctx.fillStyle   = '#f59e0b';
+        ctx.strokeStyle = '#f59e0b';
+        ctx.shadowColor = '#f59e0b88';
+        ctx.shadowBlur  = 4;
+      } else {
+        ctx.fillStyle   = byElem
+          ? (ELEMENT_COLORS[classification.elementType[n.id]] || STRAND_COLORS[n.strand % STRAND_COLORS.length])
+          : STRAND_COLORS[n.strand % STRAND_COLORS.length];
+        ctx.strokeStyle = '#111827';
+        ctx.shadowBlur  = 0;
+      }
+      ctx.beginPath();
+      ctx.arc(sx, sy, nodeR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
 
     // Labels
     if (el("showLabels").checked) {
@@ -923,25 +917,6 @@
         if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
         ctx.fillText(n.seq || String(n.id + 1), sx, sy);
       }
-    }
-
-    // Selection rings
-    if (selectedNodes.size > 0) {
-      const ringR = 6 * glZoom + 2.5;
-      ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth   = 2.5;
-      ctx.shadowColor = '#f59e0b88';
-      ctx.shadowBlur  = 6;
-      for (const id of selectedNodes) {
-        const n = graph.nodes[id];
-        if (!n) continue;
-        const [sx, sy] = worldToScreen(...graphToWorld(n.x, n.y));
-        if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
-        ctx.beginPath();
-        ctx.arc(sx, sy, ringR, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.shadowBlur = 0;
     }
 
     // End markers (5′ / 3′)
@@ -976,29 +951,20 @@
   }
 
   function disposeThreeObjects() {
-    for (const obj of [nodeInstMesh, backboneLines, pairLines]) {
+    for (const obj of [backboneLines, pairLines]) {
       if (!obj) continue;
       glScene.remove(obj);
       obj.geometry?.dispose();
-      if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-      else obj.material?.dispose();
+      obj.material?.dispose();
     }
-    nodeInstMesh = backboneLines = pairLines = null;
+    backboneLines = pairLines = null;
   }
 
   function buildThreeObjects(graph) {
     disposeThreeObjects();
-    const N  = graph.nodes.length;
     const BL = graph.backboneLinks.length;
     const PL = graph.pairLinks.length;
     const BEZIER_SEGS = 12;
-
-    // Nodes
-    const nGeo = new THREE.CircleGeometry(6, 16);
-    const nMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-    nodeInstMesh = new THREE.InstancedMesh(nGeo, nMat, N);
-    nodeInstMesh.frustumCulled = false;
-    glScene.add(nodeInstMesh);
 
     // Backbone
     const bPos = new Float32Array(BL * 6);
@@ -1041,8 +1007,7 @@
   // ─── SELECTION ─────────────────────────────────────────────────────────────
 
   function updateSelectionVisuals() {
-    if (!nodeInstMesh || !graph) return;
-    applyNodeColors();
+    if (!graph) return;
     glRenderer.render(glScene, glCamera);
     drawOverlay();
   }
@@ -1051,7 +1016,7 @@
 
   function pickNode(wx, wy) {
     if (!graph) return null;
-    const R2 = 7 ** 2; // node world-space radius = 6 (CircleGeometry), +1 margin
+    const R2 = 7 ** 2; // node world-space radius = 6, +1 unit margin
     let best = null, bestD = Infinity;
     for (const n of graph.nodes) {
       const [nwx, nwy] = graphToWorld(n.x, n.y);
@@ -1708,7 +1673,7 @@
   el("showEndMarkers").addEventListener("change", () => { if (graph) drawOverlay(); });
   el("colorByElement").addEventListener("change", () => {
     el("elementLegend").style.display = el("colorByElement").checked ? "" : "none";
-    if (graph) { applyNodeColors(); glRenderer.render(glScene, glCamera); drawOverlay(); }
+    if (graph) { glRenderer.render(glScene, glCamera); drawOverlay(); }
   });
 
   el("continuousSim").addEventListener("change", () => {
