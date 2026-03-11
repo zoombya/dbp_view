@@ -619,13 +619,14 @@
   // entry/exit and π (straight) in their interior.  Positions are computed
   // by walking the backbone and accumulating turn angles.
 
-  function fornaRadialPositions(pairByNode, N, BD) {
-    // Build 1-indexed pair table (forna convention: pt[0] = length)
+  function fornaRadialPositions(pairByNode, N, BD, rotNode = 0) {
+    // Build 1-indexed pair table with optional rotation so the walk starts at rotNode.
+    // Rotated 1-index r = ((originalIndex - rotNode + N) % N) + 1
     const pt = new Array(N + 1);
     pt[0] = N;
     for (let i = 1; i <= N; i++) pt[i] = 0;
     for (const [i, j] of pairByNode) {
-      pt[i + 1] = j + 1;
+      pt[((i - rotNode + N) % N) + 1] = ((j - rotNode + N) % N) + 1;
     }
 
     const g   = new Float64Array(N + 5);           // angle accumulator
@@ -696,16 +697,20 @@
     }
     lSz[1] -= 2; // compensate for virtual entry/exit of the outermost loop (always lp index 1)
 
-    // Walk backbone, turning by (π − accumulated angle) at each step
-    const positions = new Array(N);
+    // Walk backbone, turning by (π − accumulated angle) at each step.
+    // walkPos[p] is the position for rotated walk step p; original node = (p + rotNode) % N.
+    const walkPos = new Array(N);
     let angle = 0, px = 0, py = 0;
-    positions[0] = [px, py];
+    walkPos[0] = [px, py];
     for (let i = 1; i < N; i++) {
       px += BD * Math.cos(angle);
       py += BD * Math.sin(angle);
-      positions[i] = [px, py];
+      walkPos[i] = [px, py];
       angle += Math.PI - g[i + 1];
     }
+    // Map walk positions back to original node order
+    const positions = new Array(N);
+    for (let i = 0; i < N; i++) positions[(i + rotNode) % N] = walkPos[i];
     return positions;
   }
 
@@ -741,7 +746,14 @@
     const N       = nodes.length;
     if (!N) return;
 
-    const pos = fornaRadialPositions(graph.pairByNode, N, BD);
+    // Start the walk at the first node of the longest strand
+    let startNode = 0;
+    let bestLen = 0;
+    for (const ids of graph.strandNodeIds) {
+      if (ids.length > bestLen) { bestLen = ids.length; startNode = ids[0]; }
+    }
+
+    const pos = fornaRadialPositions(graph.pairByNode, N, BD, startNode);
 
     // Centre on viewport
     let sx = 0, sy = 0;
