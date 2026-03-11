@@ -1,4 +1,36 @@
 (() => {
+  // ─── WASM MODULE (optional acceleration) ─────────────────────────────────
+  // Loaded asynchronously; all callers await wasmReady before using `wasm`.
+  // If the module is absent (e.g. no build step), the app falls back to the
+  // pure-JS implementations below.
+  let wasm = null;
+  const wasmReady = (async () => {
+    try {
+      const mod = await import('./pkg/dbv_wasm.js');
+      await mod.default(); // initialise the WASM instance
+      wasm = mod;
+      console.info('DotBracketVibe: WASM acceleration enabled.');
+    } catch (e) {
+      console.info('DotBracketVibe: WASM not available, using JS fallback:', e.message);
+    }
+  })();
+
+  // Helper: encode graph stems as flat Int32Array pairs + Int32Array offsets
+  // suitable for the Rust classify_element_types / compute_mld API.
+  function encodeStemsFlat(stems) {
+    let total = 0;
+    for (const s of stems) total += s.length;
+    const flat    = new Int32Array(total * 2);
+    const offsets = new Int32Array(stems.length + 1);
+    let k = 0;
+    for (let si = 0; si < stems.length; si++) {
+      offsets[si] = k;
+      for (const { a, b } of stems[si]) { flat[k++] = a; flat[k++] = b; }
+    }
+    offsets[stems.length] = k;
+    return { flat, offsets };
+  }
+
   const STRAND_COLORS = [
     "#0f766e","#2563eb","#9333ea","#b45309","#be123c",
     "#4d7c0f","#0ea5e9","#7c3aed","#059669","#dc2626"
@@ -464,6 +496,46 @@
     if (!stems.length) return null;
     const N = graph.nodes.length;
 
+    // ── WASM fast path ──────────────────────────────────────────────────────
+    if (wasm) {
+      // Encode pair_by_node as flat Int32Array (-1 = unpaired)
+      const pb = new Int32Array(N).fill(-1);
+      for (const [i, j] of graph.pairByNode) pb[i] = j;
+
+      // Encode stems as flat element-index pairs: stems_flat[k]=a, stems_flat[k+1]=b
+      // stem_offsets[si] = start element index for stem si in stems_flat
+      const { flat: stemsFlatArr, offsets: stemOffsets } = encodeStemsFlat(stems);
+
+      const etypes = wasm.classify_element_types(pb, N, stemsFlatArr, stemOffsets);
+      const mld    = wasm.compute_mld(stemsFlatArr, stemOffsets);
+
+      // Map integer type codes back to name strings used by the rest of the app
+      const TYPE_NAMES = ['external', 'stem', 'hairpin', 'internal', 'junction'];
+      const elementType = Array.from(etypes, t => TYPE_NAMES[t] ?? 'external');
+
+      // Re-derive loop counts from nesting (fast JS pass, needed for stats display)
+      const sm = stems.map((s, i) => ({ i, a: s[0].a, b: s[0].b, len: s.length }))
+        .sort((x, y) => (x.a - y.a) || (y.b - x.b));
+      const children = sm.map(() => []);
+      for (let i = 0; i < sm.length; i++) {
+        for (let j = i - 1; j >= 0; j--) {
+          if (sm[j].a < sm[i].a && sm[j].b > sm[i].b) { children[j].push(i); break; }
+        }
+      }
+      let hairpins = 0, internalLoops = 0;
+      const junctions = {};
+      for (let i = 0; i < sm.length; i++) {
+        const nc = children[i].length;
+        if      (nc === 0) hairpins++;
+        else if (nc === 1) internalLoops++;
+        else { const n = nc + 1; junctions[n] = (junctions[n] || 0) + 1; }
+      }
+
+      return { hairpins, internalLoops, junctions, mld, elementType };
+    }
+
+    // ── JS fallback ─────────────────────────────────────────────────────────
+
     // Sort stems outermost-first (largest span first)
     const sm = stems.map((s, i) => ({ i, a: s[0].a, b: s[0].b, len: s.length }))
       .sort((x, y) => (x.a - y.a) || (y.b - x.b));
@@ -721,15 +793,31 @@
     if (tension <= 0) return;
     const nodes  = graph.nodes;
     const pb     = graph.pairByNode;
-    const prevOf = new Int32Array(nodes.length).fill(-1);
-    const nextOf = new Int32Array(nodes.length).fill(-1);
+    const N      = nodes.length;
+    const prevOf = new Int32Array(N).fill(-1);
+    const nextOf = new Int32Array(N).fill(-1);
     for (const lk of graph.backboneLinks) {
       nextOf[lk.source] = lk.target;
       prevOf[lk.target] = lk.source;
     }
+
+    // ── WASM fast path ──────────────────────────────────────────────────────
+    if (wasm) {
+      const xs         = new Float64Array(N);
+      const ys         = new Float64Array(N);
+      const pairByFlat = new Int32Array(N).fill(-1);
+      for (let id = 0; id < N; id++) { xs[id] = nodes[id].x; ys[id] = nodes[id].y; }
+      for (const [i, j] of pb) { pairByFlat[i] = j; }
+      // apply_loop_tension mutates xs/ys in-place
+      wasm.apply_loop_tension(xs, ys, pairByFlat, prevOf, nextOf, tension, 20);
+      for (let id = 0; id < N; id++) { nodes[id].x = xs[id]; nodes[id].y = ys[id]; }
+      return;
+    }
+
+    // ── JS fallback ─────────────────────────────────────────────────────────
     const factor = tension * 0.5;
     for (let pass = 0; pass < 20; pass++) {
-      for (let id = 0; id < nodes.length; id++) {
+      for (let id = 0; id < N; id++) {
         if (pb.has(id)) continue;           // paired base → anchor
         const p = prevOf[id], n = nextOf[id];
         if (p < 0 || n < 0) continue;      // strand end → skip
@@ -739,7 +827,8 @@
     }
   }
 
-  function layoutRadial(graph) {
+  async function layoutRadial(graph) {
+    await wasmReady;
     const BD      = getBaseSpacing();
     const tension = Math.max(0, Math.min(1, +el("loopTension").value || 0));
     const nodes   = graph.nodes;
@@ -753,7 +842,27 @@
       if (ids.length > bestLen) { bestLen = ids.length; startNode = ids[0]; }
     }
 
-    const pos = fornaRadialPositions(graph.pairByNode, N, BD, startNode);
+    // ── WASM fast path ──────────────────────────────────────────────────────
+    // Build a 1-indexed pair table rotated so the walk begins at startNode.
+    // pair_table[0] = N; pair_table[i] = 1-indexed partner (0 if unpaired).
+    let pos;
+    if (wasm) {
+      const pt = new Int32Array(N + 1);
+      pt[0] = N;
+      for (const [i, j] of graph.pairByNode) {
+        pt[((i - startNode + N) % N) + 1] = ((j - startNode + N) % N) + 1;
+      }
+      // forna_radial_positions returns flat [x0,y0,x1,y1,...] in walk order.
+      // The pair table is already rotated, so rot_node=0 and we remap manually.
+      const flat = wasm.forna_radial_positions(pt, N, BD, 0);
+      pos = new Array(N);
+      for (let i = 0; i < N; i++) {
+        pos[(i + startNode) % N] = [flat[i * 2], flat[i * 2 + 1]];
+      }
+    } else {
+      // ── JS fallback ───────────────────────────────────────────────────────
+      pos = fornaRadialPositions(graph.pairByNode, N, BD, startNode);
+    }
 
     // Centre on viewport
     let sx = 0, sy = 0;
@@ -769,7 +878,7 @@
     applyLoopTension(graph, tension);
   }
 
-  function layoutRadialFromHints(graph) {
+  async function layoutRadialFromHints(graph) {
     const BD    = getBaseSpacing();
     const nodes = graph.nodes;
     const N     = nodes.length;
@@ -782,7 +891,7 @@
     hx.forEach(x => gcx += x); gcx /= N;
     hy.forEach(y => gcy += y); gcy /= N;
     const spread = Math.max(...hx.map((x, i) => Math.hypot(x - gcx, hy[i] - gcy)));
-    if (spread < 8) { layoutRadial(graph); return; }
+    if (spread < 8) { await layoutRadial(graph); return; }
 
     // Compute fresh forna positions
     const pos = fornaRadialPositions(graph.pairByNode, N, BD);
@@ -1457,7 +1566,7 @@
 
       if (newMode === 'circular') layoutCircular(graph);
       else if (newMode === 'linear') layoutLinear(graph);
-      else if (newMode === 'radial') layoutRadialFromHints(graph);
+      else if (newMode === 'radial') await layoutRadialFromHints(graph);
       const targetPos = graph.nodes.map(n => ({ x: n.x, y: n.y }));
 
       graph.nodes.forEach((n, i) => { n.x = oldPos[i].x; n.y = oldPos[i].y; });
@@ -1550,7 +1659,7 @@
       } else if (layoutMode === 'linear') {
         layoutLinear(graph);
       } else if (layoutMode === 'radial') {
-        layoutRadial(graph);
+        await layoutRadial(graph);
       }
       if (el("alignCanonical").checked) alignCanonical(graph);
 
