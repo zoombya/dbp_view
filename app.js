@@ -60,14 +60,15 @@
   let glZoom = 1, glPanX = 0, glPanY = 0;
 
   // Three.js objects (rebuilt on each renderGraph)
-  let nodeInstMesh = null;
+  let nodeInstMesh = null, backboneLines = null, pairLines = null;
 
   // Pre-allocated reusables (avoid GC in ticked)
   const _dummy   = new THREE.Object3D();
   const _c3      = new THREE.Color();
   const _strandC = STRAND_COLORS.map(s => new THREE.Color(s));
   const _elemC   = Object.fromEntries(Object.entries(ELEMENT_COLORS).map(([k,v]) => [k, new THREE.Color(v)]));
-
+  const _pairC   = new THREE.Color('#1d4ed8');
+  const _backboneC = STRAND_COLORS.map(s => new THREE.Color(s)); // same as strand
 
   function graphToWorld(gx, gy)  { return [gx - width/2, height/2 - gy]; }
   function worldToGraph(wx, wy)  { return [wx + width/2, height/2 - wy]; }
@@ -809,6 +810,8 @@
     const nodes  = graph.nodes;
     const N      = nodes.length;
     const byElem = el("colorByElement").checked && classification;
+    const mode   = getLayoutMode();
+    const BEZIER_SEGS = 12;
 
     // ── nodes ──
     for (let i = 0; i < N; i++) {
@@ -827,6 +830,66 @@
     nodeInstMesh.instanceMatrix.needsUpdate = true;
     if (nodeInstMesh.instanceColor) nodeInstMesh.instanceColor.needsUpdate = true;
 
+    // ── backbone ──
+    {
+      const bPos = backboneLines.geometry.attributes.position.array;
+      const bCol = backboneLines.geometry.attributes.color.array;
+      const BL   = graph.backboneLinks;
+      for (let i = 0; i < BL.length; i++) {
+        const s = nodes[BL[i].source], t = nodes[BL[i].target];
+        const [sx,sy] = graphToWorld(s.x, s.y);
+        const [tx,ty] = graphToWorld(t.x, t.y);
+        const ci = i * 6;
+        bPos[ci]=sx; bPos[ci+1]=sy; bPos[ci+2]=0;
+        bPos[ci+3]=tx; bPos[ci+4]=ty; bPos[ci+5]=0;
+        const c = _strandC[s.strand % _strandC.length];
+        bCol[ci]=c.r; bCol[ci+1]=c.g; bCol[ci+2]=c.b;
+        bCol[ci+3]=c.r; bCol[ci+4]=c.g; bCol[ci+5]=c.b;
+      }
+      backboneLines.geometry.attributes.position.needsUpdate = true;
+      backboneLines.geometry.attributes.color.needsUpdate    = true;
+      backboneLines.geometry.setDrawRange(0, BL.length * 2);
+    }
+
+    // ── pairs ──
+    {
+      const pPos = pairLines.geometry.attributes.position.array;
+      const pCol = pairLines.geometry.attributes.color.array;
+      const PL   = graph.pairLinks;
+      let vi = 0;
+      for (const lk of PL) {
+        const src = nodes[lk.source], tgt = nodes[lk.target];
+        if (mode === 'linear') {
+          const mx   = (src.x + tgt.x) / 2;
+          const span = Math.abs(tgt.x - src.x);
+          const h    = Math.max(10, span * 0.5);
+          const cpx  = mx, cpy = src.y - h;
+          for (let s = 0; s < BEZIER_SEGS; s++) {
+            const t0 = s / BEZIER_SEGS, t1 = (s + 1) / BEZIER_SEGS;
+            for (const tt of [t0, t1]) {
+              const ot = 1 - tt;
+              const gx = ot*ot*src.x + 2*ot*tt*cpx + tt*tt*tgt.x;
+              const gy = ot*ot*src.y + 2*ot*tt*cpy + tt*tt*tgt.y;
+              const [wx,wy] = graphToWorld(gx, gy);
+              pPos[vi*3]=wx; pPos[vi*3+1]=wy; pPos[vi*3+2]=0;
+              pCol[vi*3]=_pairC.r; pCol[vi*3+1]=_pairC.g; pCol[vi*3+2]=_pairC.b;
+              vi++;
+            }
+          }
+        } else {
+          const [sx,sy] = graphToWorld(src.x, src.y);
+          const [tx,ty] = graphToWorld(tgt.x, tgt.y);
+          pPos[vi*3]=sx; pPos[vi*3+1]=sy; pPos[vi*3+2]=0;
+          pCol[vi*3]=_pairC.r; pCol[vi*3+1]=_pairC.g; pCol[vi*3+2]=_pairC.b; vi++;
+          pPos[vi*3]=tx; pPos[vi*3+1]=ty; pPos[vi*3+2]=0;
+          pCol[vi*3]=_pairC.r; pCol[vi*3+1]=_pairC.g; pCol[vi*3+2]=_pairC.b; vi++;
+        }
+      }
+      pairLines.geometry.attributes.position.needsUpdate = true;
+      pairLines.geometry.attributes.color.needsUpdate    = true;
+      pairLines.geometry.setDrawRange(0, vi);
+    }
+
     glRenderer.render(glScene, glCamera);
     drawOverlay();
   }
@@ -840,61 +903,6 @@
     ctx.clearRect(0, 0, width, height);
 
     const nodeR = 6 * glZoom;
-    const mode  = getLayoutMode();
-
-    // ── Backbone ──
-    if (el("showBackbone").checked) {
-      ctx.lineWidth   = 2.2;
-      ctx.lineCap     = 'round';
-      ctx.lineJoin    = 'round';
-      for (const lk of graph.backboneLinks) {
-        const s = graph.nodes[lk.source], t = graph.nodes[lk.target];
-        const [sx, sy] = worldToScreen(...graphToWorld(s.x, s.y));
-        const [tx, ty] = worldToScreen(...graphToWorld(t.x, t.y));
-        ctx.strokeStyle = STRAND_COLORS[s.strand % STRAND_COLORS.length];
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(tx, ty);
-        ctx.stroke();
-      }
-    }
-
-    // ── Pairs ──
-    if (el("showPairs").checked) {
-      ctx.strokeStyle = '#1d4ed8';
-      ctx.lineWidth   = 2.0;
-      ctx.lineCap     = 'round';
-      ctx.globalAlpha = 0.95;
-      for (const lk of graph.pairLinks) {
-        const src = graph.nodes[lk.source], tgt = graph.nodes[lk.target];
-        const [sx, sy] = worldToScreen(...graphToWorld(src.x, src.y));
-        const [tx, ty] = worldToScreen(...graphToWorld(tgt.x, tgt.y));
-        ctx.beginPath();
-        if (mode === 'linear') {
-          const mx   = (sx + tx) / 2;
-          const span = Math.abs(tx - sx);
-          const h    = Math.max(10 * glZoom, span * 0.5);
-          ctx.moveTo(sx, sy);
-          ctx.quadraticCurveTo(mx, sy - h, tx, ty);
-        } else {
-          ctx.moveTo(sx, sy);
-          ctx.lineTo(tx, ty);
-        }
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    // ── Node outlines ──
-    ctx.strokeStyle = '#111827';
-    ctx.lineWidth   = 0.8;
-    for (const n of graph.nodes) {
-      const [sx, sy] = worldToScreen(...graphToWorld(n.x, n.y));
-      if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
-      ctx.beginPath();
-      ctx.arc(sx, sy, nodeR, 0, Math.PI * 2);
-      ctx.stroke();
-    }
 
     // Labels
     if (el("showLabels").checked) {
@@ -960,12 +968,14 @@
   }
 
   function disposeThreeObjects() {
-    if (nodeInstMesh) {
-      glScene.remove(nodeInstMesh);
-      nodeInstMesh.geometry?.dispose();
-      nodeInstMesh.material?.dispose();
-      nodeInstMesh = null;
+    for (const obj of [nodeInstMesh, backboneLines, pairLines]) {
+      if (!obj) continue;
+      glScene.remove(obj);
+      obj.geometry?.dispose();
+      if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+      else obj.material?.dispose();
     }
+    nodeInstMesh = backboneLines = pairLines = null;
   }
 
   function buildThreeObjects(graph) {
@@ -975,13 +985,35 @@
     const PL = graph.pairLinks.length;
     const BEZIER_SEGS = 12;
 
-    // Nodes — 32 segments for smooth circles
-    const nGeo = new THREE.CircleGeometry(6, 32);
+    // Nodes
+    const nGeo = new THREE.CircleGeometry(6, 16);
     const nMat = new THREE.MeshBasicMaterial({ vertexColors: true });
     nodeInstMesh = new THREE.InstancedMesh(nGeo, nMat, N);
     nodeInstMesh.frustumCulled = false;
     glScene.add(nodeInstMesh);
-    // Backbone and pair lines are drawn on Canvas2D overlay for proper thickness + round caps
+
+    // Backbone
+    const bPos = new Float32Array(BL * 6);
+    const bCol = new Float32Array(BL * 6);
+    const bGeo = new THREE.BufferGeometry();
+    bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3).setUsage(THREE.DynamicDrawUsage));
+    bGeo.setAttribute('color',    new THREE.BufferAttribute(bCol, 3).setUsage(THREE.DynamicDrawUsage));
+    backboneLines = new THREE.LineSegments(bGeo, new THREE.LineBasicMaterial({ vertexColors: true }));
+    backboneLines.frustumCulled = false;
+    backboneLines.visible = el("showBackbone").checked;
+    glScene.add(backboneLines);
+
+    // Pairs — allocate for worst-case Bezier
+    const segsPerPair = BEZIER_SEGS; // always allocate for linear mode
+    const pPos = new Float32Array(PL * segsPerPair * 2 * 3);
+    const pCol = new Float32Array(PL * segsPerPair * 2 * 3);
+    const pGeo = new THREE.BufferGeometry();
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage));
+    pGeo.setAttribute('color',    new THREE.BufferAttribute(pCol, 3).setUsage(THREE.DynamicDrawUsage));
+    pairLines = new THREE.LineSegments(pGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: 0.95, transparent: true }));
+    pairLines.frustumCulled = false;
+    pairLines.visible = el("showPairs").checked;
+    glScene.add(pairLines);
   }
 
   function fitView() {
@@ -1673,8 +1705,8 @@
   el("clearSelBtn").addEventListener("click", () => { selectedNodes.clear(); updateSelectionVisuals(); });
 
   el("showLabels").addEventListener("change",     () => { if (graph) ticked(); });
-  el("showPairs").addEventListener("change",      () => { if (graph) drawOverlay(); });
-  el("showBackbone").addEventListener("change",   () => { if (graph) drawOverlay(); });
+  el("showPairs").addEventListener("change",      () => { if (pairLines)     { pairLines.visible     = el("showPairs").checked;     glRenderer.render(glScene, glCamera); } });
+  el("showBackbone").addEventListener("change",   () => { if (backboneLines) { backboneLines.visible  = el("showBackbone").checked;  glRenderer.render(glScene, glCamera); } });
   el("showEndMarkers").addEventListener("change", () => { if (graph) drawOverlay(); });
   el("colorByElement").addEventListener("change", () => {
     el("elementLegend").style.display = el("colorByElement").checked ? "" : "none";
